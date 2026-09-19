@@ -1,0 +1,629 @@
+/* Antigravity CLI plugin styles (ported from hermes-agent, agy- prefix) */
+
+.agy-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+}
+
+.agy-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.agy-title {
+  font-weight: 600;
+}
+
+.agy-header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.agy-icon-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 4px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.agy-icon-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.agy-tabbar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.agy-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: var(--font-ui-smaller);
+}
+
+.agy-tab.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.agy-tab-label {
+  cursor: pointer;
+}
+
+.agy-tab-close {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.6;
+}
+
+.agy-tab-close:hover {
+  opacity: 1;
+}
+
+.agy-body-host {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.agy-body {
+  display: none;
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 10px;
+  /* Obsidian's app.css sets body { user-select: none }; opt the transcript back in. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.agy-body.is-active {
+  display: block;
+}
+
+.agy-msg {
+  margin-bottom: 14px;
+}
+
+.agy-msg-role {
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.agy-msg-user .agy-msg-content {
+  background: var(--background-secondary);
+  border-radius: 6px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+}
+
+.agy-msg-assistant .agy-msg-content {
+  padding: 2px 0;
+}
+
+.agy-msg-content {
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+}
+
+/* ---- Markdown rendering inside assistant bubbles ---- */
+
+.agy-msg-assistant .agy-msg-content > *:first-child {
+  margin-top: 0;
+}
+
+.agy-msg-assistant .agy-msg-content > *:last-child {
+  margin-bottom: 0;
+}
+
+.agy-msg-assistant .agy-msg-content p,
+.agy-msg-assistant .agy-msg-content ul,
+.agy-msg-assistant .agy-msg-content ol,
+.agy-msg-assistant .agy-msg-content blockquote,
+.agy-msg-assistant .agy-msg-content pre,
+.agy-msg-assistant .agy-msg-content table,
+.agy-msg-assistant .agy-msg-content h1,
+.agy-msg-assistant .agy-msg-content h2,
+.agy-msg-assistant .agy-msg-content h3,
+.agy-msg-assistant .agy-msg-content h4,
+.agy-msg-assistant .agy-msg-content h5,
+.agy-msg-assistant .agy-msg-content h6 {
+  margin: 0.5em 0;
+}
+
+.agy-msg-assistant .agy-msg-content h1,
+.agy-msg-assistant .agy-msg-content h2,
+.agy-msg-assistant .agy-msg-content h3,
+.agy-msg-assistant .agy-msg-content h4,
+.agy-msg-assistant .agy-msg-content h5,
+.agy-msg-assistant .agy-msg-content h6 {
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.agy-msg-assistant .agy-msg-content h1 { font-size: 1.25em; }
+.agy-msg-assistant .agy-msg-content h2 { font-size: 1.15em; }
+.agy-msg-assistant .agy-msg-content h3 { font-size: 1.05em; }
+.agy-msg-assistant .agy-msg-content h4,
+.agy-msg-assistant .agy-msg-content h5,
+.agy-msg-assistant .agy-msg-content h6 {
+  font-size: 1em;
+}
+
+.agy-msg-assistant .agy-msg-content ul,
+.agy-msg-assistant .agy-msg-content ol {
+  padding-inline-start: 1.4em;
+}
+
+.agy-msg-assistant .agy-msg-content li {
+  margin: 0.15em 0;
+}
+
+.agy-msg-assistant .agy-msg-content li > p {
+  margin: 0;
+}
+
+.agy-msg-assistant .agy-msg-content code {
+  font-size: 0.85em;
+  background: var(--background-secondary);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.agy-msg-assistant .agy-msg-content pre {
+  background: var(--background-secondary);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.agy-msg-assistant .agy-msg-content pre code {
+  background: transparent;
+  padding: 0;
+  white-space: pre;
+}
+
+.agy-msg-assistant .agy-msg-content blockquote {
+  border-left: 3px solid var(--background-modifier-border);
+  padding: 0 0.8em;
+  color: var(--text-muted);
+}
+
+.agy-msg-assistant .agy-msg-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.agy-msg-assistant .agy-msg-content th,
+.agy-msg-assistant .agy-msg-content td {
+  border: 1px solid var(--background-modifier-border);
+  padding: 4px 8px;
+}
+
+.agy-msg-assistant .agy-msg-content th {
+  background: var(--background-secondary);
+}
+
+/* Attached note/selection content on a user bubble (collapsed by default). */
+.agy-attachment {
+  margin-top: 6px;
+  font-size: var(--font-ui-smaller);
+}
+
+.agy-attachment-title {
+  display: inline-block;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--font-monospace);
+}
+
+.agy-attachment-title:hover {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+
+.agy-attachment-body {
+  display: none;
+  white-space: pre-wrap;
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  color: var(--text-muted);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.agy-attachment.is-expanded .agy-attachment-body {
+  display: block;
+}
+
+.agy-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.agy-tool {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.agy-tool-completed {
+  color: var(--text-success, var(--text-muted));
+}
+
+.agy-tool-failed {
+  color: var(--text-error);
+}
+
+.agy-tool-preview,
+.agy-tool-error {
+  opacity: 0.75;
+  font-family: var(--font-monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agy-usage {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+/* Result action buttons under a reply. */
+.agy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.agy-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: var(--font-ui-smaller);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.agy-action-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.agy-action-btn.is-suggested {
+  border-color: var(--interactive-accent);
+  color: var(--text-accent);
+}
+
+.agy-action-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.agy-action-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.agy-error {
+  color: var(--text-error);
+  background: var(--background-modifier-error);
+  border-radius: 6px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  margin-top: 4px;
+}
+
+/* Preset bar */
+.agy-preset-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px 0;
+}
+
+.agy-preset-btn {
+  padding: 2px 10px;
+  font-size: var(--font-ui-smaller);
+  border-radius: 12px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.agy-preset-btn:hover {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.agy-preset-empty {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.agy-context-row {
+  display: flex;
+  gap: 14px;
+  padding: 6px 10px 0;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.agy-context-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.agy-input-wrap {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.agy-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 52px;
+  font-family: inherit;
+}
+
+.agy-input-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.agy-input-actions-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.agy-input-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.agy-meta-item {
+  white-space: nowrap;
+}
+
+.agy-meta-model {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
+.agy-meta-model:hover {
+  background: var(--background-modifier-hover);
+}
+
+.agy-meta-tokens {
+  color: var(--text-faint);
+}
+
+.agy-hidden {
+  display: none;
+}
+
+.agy-greeting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 120px;
+  padding: 16px;
+}
+
+.agy-greeting-text {
+  font-size: 1.3em;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.agy-access-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 200px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+}
+
+.agy-access-chip:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.agy-access-chip.is-full {
+  color: var(--text-error);
+}
+
+.agy-access-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.agy-access-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.agy-access-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agy-status {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.agy-send-btn {
+  padding: 4px 14px;
+}
+
+.agy-send-btn.is-running {
+  background: var(--background-modifier-error, var(--interactive-accent));
+  color: var(--text-on-accent);
+}
+
+.agy-send-btn.is-running:hover {
+  background: var(--text-error);
+}
+
+/* Settings */
+.agy-test-result {
+  margin-top: 4px;
+}
+
+.agy-test-ok {
+  color: var(--text-success, var(--text-normal));
+}
+
+.agy-test-fail {
+  color: var(--text-error);
+}
+
+.agy-settings-textarea {
+  width: 100%;
+  min-width: 100%;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+}
+
+.agy-preset-box {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  margin: 6px 0;
+}
+
+/* Chat history modal */
+.agy-history-modal h3 {
+  margin: 0 0 10px 0;
+}
+
+.agy-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.agy-history-empty {
+  color: var(--text-muted);
+  padding: 8px 2px;
+}
+
+.agy-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.agy-history-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.agy-history-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.agy-history-title {
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agy-history-preview {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.agy-history-meta {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.agy-history-del {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  opacity: 0.7;
+  padding: 2px;
+}
+
+.agy-history-del:hover {
+  color: var(--text-error);
+  opacity: 1;
+}

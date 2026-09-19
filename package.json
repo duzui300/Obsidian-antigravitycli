@@ -7,7 +7,7 @@
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
     "build:test": "esbuild src/runtime/protocol.ts src/runtime/context.ts src/runtime/presets.ts src/runtime/history.ts src/runtime/cliLocator.ts src/runtime/agySession.ts --bundle --format=esm --platform=node --outdir=tests/.build --out-extension:.js=.mjs",
-    "test": "npm run build:test && node --test tests/",
+    "test": "npm run build:test && node --test \"tests/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.ts\"",
     "smoke": "node scripts/smoke-session.mjs"
