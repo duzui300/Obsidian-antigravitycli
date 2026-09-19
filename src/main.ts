@@ -12,7 +12,7 @@ import { parseModelsOutput } from "./runtime/protocol";
 import { Conversation, parseHistoryFile, removeConversation, serializeHistoryFile, upsertConversation } from "./runtime/history";
 
 /** Bundled-build marker (checked after deploy per project rules). */
-export const ANTIGRAVITY_PLUGIN_VERSION = "0.2.0";
+export const ANTIGRAVITY_PLUGIN_VERSION = "0.2.1";
 
 /** Editor range of a selection, so "Replace selection" can target it later. */
 export interface SelectionRange {

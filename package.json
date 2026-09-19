@@ -1,6 +1,6 @@
 {
   "name": "antigravity-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Obsidian plugin: process notes with Gemini via the locally installed Antigravity CLI (agy).",
   "main": "main.js",
   "scripts": {

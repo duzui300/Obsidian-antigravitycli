@@ -26,6 +26,7 @@ const context = await esbuild.context({
     "os",
     "path",
     "readline",
+    "timers",
     "crypto",
     "@codemirror/state",
     "@codemirror/view",

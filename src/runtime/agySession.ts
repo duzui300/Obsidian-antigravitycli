@@ -9,14 +9,10 @@
 // Only this file knows about child_process. The spawn and kill functions are
 // injectable so the session is unit-tested against a fake child (see
 // tests/agySession.test.mjs) without touching the real CLI.
-//
-// Timers: this module is pure Node (it also runs under `node --test` where
-// there is no `window`), and its timers guard a child process rather than
-// DOM work in a popout window, so the global timers are the correct choice.
-/* eslint-disable obsidianmd/prefer-window-timers */
 
 import { spawn as nodeSpawn } from "child_process";
 import type { Readable, Writable } from "stream";
+import { clearTimeout as nodeClearTimeout, setTimeout as nodeSetTimeout } from "timers";
 import {
   buildUserInputLine,
   classifyFailure,
@@ -103,6 +99,13 @@ export interface SessionDeps {
   platform?: string;
 }
 
+/**
+ * Process-level timers from Node's `timers` module. These guard a child
+ * process, not DOM work, so they must not be tied to any particular Obsidian
+ * window (popout or main); they also exist under `node --test`.
+ */
+const timerHost = { setTimeout: nodeSetTimeout, clearTimeout: nodeClearTimeout };
+
 export const DEFAULT_IDLE_TIMEOUT_MS = 120000;
 export const DEFAULT_SPAWN_TIMEOUT_MS = 30000;
 /** A single NDJSON line larger than this is treated as a protocol failure. */
@@ -177,7 +180,7 @@ export function defaultKillTree(platform: string): KillTreeFn {
 
 interface ActiveTurn {
   cb: TurnCallbacks;
-  idleTimer: ReturnType<typeof setTimeout> | null;
+  idleTimer: ReturnType<typeof nodeSetTimeout> | null;
   emittedText: boolean;
   aborted: boolean;
 }
@@ -194,7 +197,7 @@ export class AgySession {
   private pendingInit: {
     resolve: (info: InitInfo) => void;
     reject: (err: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
+    timer: ReturnType<typeof nodeSetTimeout>;
   } | null = null;
   private turn: ActiveTurn | null = null;
   private closed = false;
@@ -254,7 +257,7 @@ export class AgySession {
     });
 
     return new Promise<InitInfo>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = timerHost.setTimeout(() => {
         this.pendingInit = null;
         this.killTreeFn(child);
         reject(new Error(classifyFailure({ timedOut: true }).message));
@@ -310,10 +313,10 @@ export class AgySession {
     if (!child || this.exitInfo) return Promise.resolve();
     return new Promise<void>((resolve) => {
       const done = () => {
-        clearTimeout(grace);
+        timerHost.clearTimeout(grace);
         resolve();
       };
-      const grace = setTimeout(() => {
+      const grace = timerHost.setTimeout(() => {
         this.killTreeFn(child);
         resolve();
       }, CLOSE_GRACE_MS);
@@ -344,7 +347,7 @@ export class AgySession {
     this.spawnError = err;
     const wrapped = this.wrapSpawnError(err);
     if (this.pendingInit) {
-      clearTimeout(this.pendingInit.timer);
+      timerHost.clearTimeout(this.pendingInit.timer);
       const p = this.pendingInit;
       this.pendingInit = null;
       p.reject(wrapped);
@@ -367,7 +370,7 @@ export class AgySession {
       this.handleLine(rest);
     }
     if (this.pendingInit) {
-      clearTimeout(this.pendingInit.timer);
+      timerHost.clearTimeout(this.pendingInit.timer);
       const p = this.pendingInit;
       this.pendingInit = null;
       p.reject(new Error(classifyFailure({ exitCode: code, stderr: this.stderrTail }).message));
@@ -411,7 +414,7 @@ export class AgySession {
       if (this.conversationId && ev.conversationId && ev.conversationId !== this.conversationId) {
         const msg = "Antigravity returned a different conversation id; refusing to continue.";
         if (this.pendingInit) {
-          clearTimeout(this.pendingInit.timer);
+          timerHost.clearTimeout(this.pendingInit.timer);
           const p = this.pendingInit;
           this.pendingInit = null;
           p.reject(new Error(msg));
@@ -428,7 +431,7 @@ export class AgySession {
         permissionMode: ev.permissionMode
       };
       if (this.pendingInit) {
-        clearTimeout(this.pendingInit.timer);
+        timerHost.clearTimeout(this.pendingInit.timer);
         const p = this.pendingInit;
         this.pendingInit = null;
         p.resolve(this.initInfo);
@@ -483,8 +486,8 @@ export class AgySession {
   private armIdleTimer(): void {
     const turn = this.turn;
     if (!turn) return;
-    if (turn.idleTimer) clearTimeout(turn.idleTimer);
-    turn.idleTimer = setTimeout(() => {
+    if (turn.idleTimer) timerHost.clearTimeout(turn.idleTimer);
+    turn.idleTimer = timerHost.setTimeout(() => {
       turn.idleTimer = null;
       if (this.turn !== turn) return;
       const info = classifyFailure({ timedOut: true });
@@ -496,7 +499,7 @@ export class AgySession {
 
   private clearIdleTimer(): void {
     if (this.turn?.idleTimer) {
-      clearTimeout(this.turn.idleTimer);
+      timerHost.clearTimeout(this.turn.idleTimer);
       this.turn.idleTimer = null;
     }
   }
