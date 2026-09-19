@@ -41,6 +41,12 @@ export interface SessionOptions {
   mode?: "accept-edits" | "plan" | "";
   /** Adds --dangerously-skip-permissions ("Full access"). */
   skipPermissions?: boolean;
+  /**
+   * Inline JSON Schema for structured output (`--json-schema`). Process-level:
+   * every turn of this session then ends with a JSON step and the result
+   * carries `structured_output`, so use a dedicated session for it.
+   */
+  jsonSchema?: string;
   /** Kill the turn if no stdout line arrives for this long. Default 120000. */
   idleTimeoutMs?: number;
   /** Time allowed for the process to print its init event. Default 30000. */
@@ -54,7 +60,7 @@ export interface TurnCallbacks {
   onToolEvent?(event: ToolEvent): void;
   onUsage?(usage: UsageInfo): void;
   onError(message: string, category: FailureCategory): void;
-  onDone(conversationId: string, response: string): void;
+  onDone(conversationId: string, response: string, structured?: Record<string, unknown>): void;
 }
 
 export interface ChatHandle {
@@ -119,6 +125,8 @@ export function buildSessionArgs(opts: SessionOptions): string[] {
   const conv = (opts.conversationId || "").trim();
   if (conv) args.push("--conversation", conv);
   if (opts.skipPermissions) args.push("--dangerously-skip-permissions");
+  const schema = (opts.jsonSchema || "").trim();
+  if (schema) args.push("--json-schema", schema);
   return args;
 }
 
@@ -452,7 +460,7 @@ export class AgySession {
       if (ev.conversationId) this.conversationId = ev.conversationId;
       if (ev.status === "SUCCESS") {
         if (!turn.emittedText && ev.response) turn.cb.onChunk(ev.response);
-        turn.cb.onDone(this.conversationId || ev.conversationId, ev.response);
+        turn.cb.onDone(this.conversationId || ev.conversationId, ev.response, ev.structured);
       } else {
         const info = classifyFailure({
           exitCode: 0,

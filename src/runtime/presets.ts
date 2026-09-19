@@ -6,7 +6,7 @@
 export type PresetTarget = "note" | "selection" | "either";
 
 /** What to do with the reply by default (the user can always pick another). */
-export type ResultAction = "copy" | "insert" | "replace" | "append" | "new-note";
+export type ResultAction = "copy" | "insert" | "replace" | "append" | "new-note" | "frontmatter";
 
 export interface Preset {
   /** Stable id, used for the command id and history. */
@@ -19,7 +19,23 @@ export interface Preset {
   appliesTo: PresetTarget;
   /** Suggested result action, highlighted on the reply. */
   suggestedAction: ResultAction;
+  /**
+   * Optional JSON Schema (as a string). When set, the preset runs in a
+   * dedicated `--json-schema` session and the reply is the parsed object
+   * (title/tags/... fields) instead of free text.
+   */
+  outputSchema?: string;
 }
+
+/** Schema of the built-in Title + tags preset (kept small for the CLI argv). */
+export const TITLE_TAGS_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    title: { type: "string", description: "A concise title, under 12 words" },
+    tags: { type: "array", items: { type: "string" }, description: "3-5 lowercase, hyphenated tags" }
+  },
+  required: ["title", "tags"]
+});
 
 export const BUILTIN_PRESETS: Preset[] = [
   {
@@ -58,14 +74,26 @@ export const BUILTIN_PRESETS: Preset[] = [
     id: "title-tags",
     name: "Title + tags",
     instruction:
-      "Propose a concise title (under 12 words) and 3-5 tags for the attached text. Output exactly this Markdown:\n\n**Title:** <title>\n**Tags:** #tag1 #tag2 #tag3\n\nTags are lowercase, hyphenated, and specific to the content.",
+      "Propose a concise title (under 12 words) and 3-5 tags for the attached text. Tags are lowercase, hyphenated, and specific to the content. Return the structured result only.",
     appliesTo: "note",
-    suggestedAction: "append"
+    suggestedAction: "frontmatter",
+    outputSchema: TITLE_TAGS_SCHEMA
   }
 ];
 
 const TARGETS = new Set<PresetTarget>(["note", "selection", "either"]);
-const ACTIONS = new Set<ResultAction>(["copy", "insert", "replace", "append", "new-note"]);
+const ACTIONS = new Set<ResultAction>(["copy", "insert", "replace", "append", "new-note", "frontmatter"]);
+
+/** A valid schema string is a JSON object; anything else is dropped. */
+export function normalizeSchema(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || !raw.trim()) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) ? JSON.stringify(parsed) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -104,10 +132,13 @@ export function normalizePresets(raw: unknown): Preset[] {
     }
     ids.add(id);
     const appliesTo = TARGETS.has(item.appliesTo as PresetTarget) ? (item.appliesTo as PresetTarget) : "either";
-    const suggestedAction = ACTIONS.has(item.suggestedAction as ResultAction)
+    const outputSchema = normalizeSchema(item.outputSchema);
+    let suggestedAction = ACTIONS.has(item.suggestedAction as ResultAction)
       ? (item.suggestedAction as ResultAction)
       : "copy";
-    out.push({ id, name, instruction, appliesTo, suggestedAction });
+    // "frontmatter" only makes sense for structured output.
+    if (suggestedAction === "frontmatter" && !outputSchema) suggestedAction = "copy";
+    out.push({ id, name, instruction, appliesTo, suggestedAction, ...(outputSchema ? { outputSchema } : {}) });
   }
   return out;
 }

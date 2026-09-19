@@ -43,6 +43,8 @@ export type AgyEvent =
       error: string;
       numTurns: number;
       usage?: UsageInfo;
+      /** Parsed object when the session was started with --json-schema. */
+      structured?: Record<string, unknown>;
     }
   | { kind: "ignored" };
 
@@ -151,6 +153,7 @@ export function parseAgyLine(line: string): AgyEvent | null {
   if (event === "result") {
     const res = isRecord(raw.result) ? raw.result : {};
     const usage = usageFrom(res.usage);
+    const structured = isRecord(res.structured_output) ? res.structured_output : undefined;
     return {
       kind: "result",
       conversationId: str(res.conversation_id),
@@ -158,7 +161,8 @@ export function parseAgyLine(line: string): AgyEvent | null {
       response: str(res.response),
       error: str(res.error),
       numTurns: num(res.num_turns),
-      ...(usage ? { usage } : {})
+      ...(usage ? { usage } : {}),
+      ...(structured ? { structured } : {})
     };
   }
 

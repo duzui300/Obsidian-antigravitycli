@@ -106,6 +106,20 @@ test("buildSessionArgs emits the documented flag set in order, never -p", () => 
   assert.ok(!args.includes("-p"));
   const minimal = buildSessionArgs({ cliPath: "x", cwd: "y", model: "" });
   assert.deepEqual(minimal, ["--input-format", "stream-json", "--output-format", "stream-json"]);
+  const schema = buildSessionArgs({ cliPath: "x", cwd: "y", model: "", jsonSchema: '{"type":"object"}' });
+  assert.deepEqual(schema.slice(-2), ["--json-schema", '{"type":"object"}']);
+});
+
+test("onDone receives structured_output from the result", async () => {
+  const { child, session } = makeSession({ jsonSchema: '{"type":"object"}' });
+  const p = session.start();
+  child.line(init());
+  await p;
+  let got = null;
+  session.send("go", { onChunk: () => {}, onError: () => assert.fail("err"), onDone: (id, response, structured) => (got = { response, structured }) });
+  child.line(result({ response: '{"title":"T"}\n', structured_output: { title: "T", tags: ["x"] } }));
+  await tick();
+  assert.deepEqual(got, { response: '{"title":"T"}\n', structured: { title: "T", tags: ["x"] } });
 });
 
 test("start spawns with cwd, windowsHide and piped stdio, then resolves on init", async () => {

@@ -1,15 +1,18 @@
-import { Editor, EditorPosition, FileSystemAdapter, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
+import { Editor, EditorPosition, FileSystemAdapter, MarkdownView, Notice, Plugin, TFile, TFolder, WorkspaceLeaf, normalizePath } from "obsidian";
 import { AntigravitySettings, DEFAULT_SETTINGS } from "./settings/types";
 import { AntigravitySettingTab } from "./settings/AntigravitySettingTab";
 import { AntigravityView, VIEW_TYPE_ANTIGRAVITY } from "./view/AntigravityView";
+import { BatchModal } from "./view/BatchModal";
 import { AgyClient } from "./runtime/agyClient";
+import { buildAppContext } from "./runtime/context";
 import type { NoteContext } from "./runtime/context";
+import { mergeFrontmatterFields } from "./runtime/batch";
 import { normalizePresets, presetApplicable, presetCommandId, ResultAction } from "./runtime/presets";
 import { parseModelsOutput } from "./runtime/protocol";
 import { Conversation, parseHistoryFile, removeConversation, serializeHistoryFile, upsertConversation } from "./runtime/history";
 
 /** Bundled-build marker (checked after deploy per project rules). */
-export const ANTIGRAVITY_PLUGIN_VERSION = "0.1.0";
+export const ANTIGRAVITY_PLUGIN_VERSION = "0.2.0";
 
 /** Editor range of a selection, so "Replace selection" can target it later. */
 export interface SelectionRange {
@@ -121,6 +124,24 @@ export default class AntigravityPlugin extends Plugin {
         return true;
       }
     });
+
+    this.addCommand({
+      id: "run-preset-on-folder",
+      name: "Run preset on folder...",
+      callback: () => new BatchModal(this.app, this, null).open()
+    });
+
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!(file instanceof TFolder)) return;
+        menu.addItem((item) =>
+          item
+            .setTitle("Antigravity: run preset on folder...")
+            .setIcon("sparkles")
+            .onClick(() => new BatchModal(this.app, this, file).open())
+        );
+      })
+    );
 
     for (const preset of this.settings.presets) {
       this.addCommand({
@@ -279,6 +300,18 @@ export default class AntigravityPlugin extends Plugin {
     return adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
   }
 
+  /** The app-context block appended to every turn (chat and batch). */
+  buildAppContextText(): string {
+    const s = this.settings;
+    return buildAppContext({
+      vaultPath: this.client.workingDir(),
+      outputLanguage: s.outputLanguage,
+      customPrompt: s.customSystemPrompt,
+      markdownReminder: s.markdownFormattingPromptEnabled,
+      fullAccess: s.toolAccess === "full"
+    });
+  }
+
   refreshOpenViews(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_ANTIGRAVITY)) {
       const view = leaf.view;
@@ -328,9 +361,9 @@ export default class AntigravityPlugin extends Plugin {
 
   // ---- result actions (write the reply back into the vault) ----
 
-  async applyResult(action: ResultAction, rawText: string, ctx: TurnContext): Promise<void> {
+  async applyResult(action: ResultAction, rawText: string, ctx: TurnContext, structured?: Record<string, unknown>): Promise<void> {
     const text = rawText.replace(/\s+$/, "");
-    if (!text) return;
+    if (!text && action !== "frontmatter") return;
     try {
       switch (action) {
         case "copy":
@@ -341,14 +374,63 @@ export default class AntigravityPlugin extends Plugin {
           return this.insertAtCursor(text);
         case "replace":
           return await this.replaceSelection(text, ctx);
-        case "append":
-          return await this.appendToNote(text, ctx);
-        case "new-note":
-          return await this.createNote(text, ctx);
+        case "append": {
+          const file = this.fileForContext(ctx);
+          if (!file) {
+            new Notice("Antigravity: no note to append to.");
+            return;
+          }
+          await this.appendToFile(file, text);
+          new Notice(`Antigravity: appended to ${file.basename}.`);
+          return;
+        }
+        case "new-note": {
+          const created = await this.createNoteFrom(this.fileForContext(ctx), text);
+          await this.app.workspace.getLeaf("tab").openFile(created);
+          new Notice(`Antigravity: created ${created.basename}.`);
+          return;
+        }
+        case "frontmatter": {
+          const file = this.fileForContext(ctx);
+          if (!file) {
+            new Notice("Antigravity: no note to update.");
+            return;
+          }
+          if (!structured) {
+            new Notice("Antigravity: this reply has no structured fields.");
+            return;
+          }
+          const changed = await this.applyFrontmatter(file, structured);
+          new Notice(changed.length ? `Antigravity: updated ${changed.join(", ")} in ${file.basename}.` : "Antigravity: frontmatter already up to date.");
+          return;
+        }
       }
     } catch (e) {
       new Notice(`Antigravity: ${(e as Error).message}`);
     }
+  }
+
+  /** The note a turn was taken from, else the active note. */
+  private fileForContext(ctx: TurnContext): TFile | null {
+    if (ctx.notePath) {
+      const f = this.app.vault.getAbstractFileByPath(ctx.notePath);
+      if (f instanceof TFile) return f;
+    }
+    return this.getActiveMarkdownView()?.file ?? null;
+  }
+
+  /** Append text to a note (used by chat actions and batch runs). */
+  async appendToFile(file: TFile, text: string): Promise<void> {
+    await this.app.vault.append(file, `\n\n${text.replace(/\s+$/, "")}\n`);
+  }
+
+  /** Merge structured fields into a note's frontmatter; returns changed keys. */
+  async applyFrontmatter(file: TFile, structured: Record<string, unknown>): Promise<string[]> {
+    let changed: string[] = [];
+    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      changed = mergeFrontmatterFields(fm, structured);
+    });
+    return changed;
   }
 
   private insertAtCursor(text: string): void {
@@ -426,28 +508,8 @@ export default class AntigravityPlugin extends Plugin {
     new Notice("Antigravity: the original text has changed; result copied to clipboard instead.");
   }
 
-  private async appendToNote(text: string, ctx: TurnContext): Promise<void> {
-    let file: TFile | null = null;
-    if (ctx.notePath) {
-      const f = this.app.vault.getAbstractFileByPath(ctx.notePath);
-      if (f instanceof TFile) file = f;
-    }
-    if (!file) file = this.getActiveMarkdownView()?.file ?? null;
-    if (!file) {
-      new Notice("Antigravity: no note to append to.");
-      return;
-    }
-    await this.app.vault.append(file, `\n\n${text}\n`);
-    new Notice(`Antigravity: appended to ${file.basename}.`);
-  }
-
-  private async createNote(text: string, ctx: TurnContext): Promise<void> {
-    let source: TFile | null = null;
-    if (ctx.notePath) {
-      const f = this.app.vault.getAbstractFileByPath(ctx.notePath);
-      if (f instanceof TFile) source = f;
-    }
-    if (!source) source = this.getActiveMarkdownView()?.file ?? null;
+  /** Create a sibling note holding `text`, linking back to `source` (used by chat and batch). */
+  async createNoteFrom(source: TFile | null, text: string): Promise<TFile> {
     const folder = source?.parent?.path && source.parent.path !== "/" ? source.parent.path : "";
     const stamp = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
@@ -460,9 +522,7 @@ export default class AntigravityPlugin extends Plugin {
       name = `${baseName} (${n++}).md`;
       path = normalizePath(folder ? `${folder}/${name}` : name);
     }
-    const body = source ? `${text}\n\n---\nSource: [[${source.basename}]]\n` : `${text}\n`;
-    const created = await this.app.vault.create(path, body);
-    await this.app.workspace.getLeaf("tab").openFile(created);
-    new Notice(`Antigravity: created ${created.basename}.`);
+    const body = source ? `${text.replace(/\s+$/, "")}\n\n---\nSource: [[${source.basename}]]\n` : `${text.replace(/\s+$/, "")}\n`;
+    return this.app.vault.create(path, body);
   }
 }

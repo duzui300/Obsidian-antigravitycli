@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type AntigravityPlugin from "../main";
-import { BUILTIN_PRESETS, Preset, PresetTarget, ResultAction, slugifyPresetId } from "../runtime/presets";
+import { BUILTIN_PRESETS, Preset, PresetTarget, ResultAction, normalizeSchema, slugifyPresetId } from "../runtime/presets";
 import { humanizeModel } from "../runtime/protocol";
 import type { OutputLanguage } from "../runtime/context";
 import type { ToolAccess } from "./types";
@@ -312,6 +312,7 @@ export class AntigravitySettingTab extends PluginSettingTab {
           .addOption("replace", "Suggest: replace selection")
           .addOption("append", "Suggest: append to note")
           .addOption("new-note", "Suggest: new note")
+          .addOption("frontmatter", "Suggest: apply to frontmatter (needs schema)")
           .setValue(preset.suggestedAction)
           .onChange(async (v) => {
             preset.suggestedAction = v as ResultAction;
@@ -338,5 +339,31 @@ export class AntigravitySettingTab extends PluginSettingTab {
       ta.inputEl.addClass("agy-settings-textarea");
       return ta;
     });
+    new Setting(box)
+      .setName("Output schema (optional)")
+      .setDesc("JSON Schema for structured output. When set, the preset runs with --json-schema and the reply's fields (title, tags, ...) can be applied to the note's frontmatter. Leave empty for free text.")
+      .addTextArea((ta) => {
+        ta.setPlaceholder('{"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}')
+          .setValue(preset.outputSchema ?? "")
+          .onChange(async (v) => {
+            const trimmed = v.trim();
+            if (!trimmed) {
+              delete preset.outputSchema;
+              if (preset.suggestedAction === "frontmatter") preset.suggestedAction = "copy";
+              await this.plugin.saveSettings();
+              return;
+            }
+            const valid = normalizeSchema(trimmed);
+            if (!valid) {
+              new Notice("Antigravity: output schema must be a JSON object; not saved.");
+              return;
+            }
+            preset.outputSchema = valid;
+            await this.plugin.saveSettings();
+          });
+        ta.inputEl.rows = 3;
+        ta.inputEl.addClass("agy-settings-textarea");
+        return ta;
+      });
   }
 }

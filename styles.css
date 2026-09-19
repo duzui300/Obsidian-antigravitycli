@@ -556,6 +556,94 @@
   margin: 6px 0;
 }
 
+/* Batch modal */
+.agy-batch-modal h3 {
+  margin: 0 0 10px 0;
+}
+
+.agy-batch-list-title {
+  font-weight: 600;
+  margin: 10px 0 4px;
+}
+
+.agy-batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+.agy-batch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-ui-small);
+  min-width: 0;
+}
+
+.agy-batch-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.agy-batch-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.agy-batch-done .agy-batch-icon {
+  color: var(--text-success, var(--text-normal));
+}
+
+.agy-batch-error .agy-batch-icon,
+.agy-batch-error .agy-batch-detail {
+  color: var(--text-error);
+}
+
+.agy-batch-running .agy-batch-icon {
+  color: var(--text-accent);
+}
+
+.agy-batch-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agy-batch-detail {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+
+.agy-batch-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.agy-batch-summary {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.agy-batch-buttons {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 /* Chat history modal */
 .agy-history-modal h3 {
   margin: 0 0 10px 0;

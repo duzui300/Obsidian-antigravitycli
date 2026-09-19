@@ -82,6 +82,28 @@ test("presetInstruction names the attached target", () => {
   assert.ok(presetInstruction(p, "note").startsWith(p.instruction));
 });
 
+test("the Title + tags built-in carries a valid schema and suggests frontmatter", () => {
+  const p = BUILTIN_PRESETS.find((x) => x.id === "title-tags");
+  assert.equal(p.suggestedAction, "frontmatter");
+  const schema = JSON.parse(p.outputSchema);
+  assert.deepEqual(schema.required, ["title", "tags"]);
+});
+
+test("normalizePresets validates outputSchema and demotes frontmatter without one", () => {
+  const out = normalizePresets([
+    { name: "A", instruction: "x", suggestedAction: "frontmatter", outputSchema: '{"type":"object"}' },
+    { name: "B", instruction: "x", suggestedAction: "frontmatter" },
+    { name: "C", instruction: "x", outputSchema: "not json" },
+    { name: "D", instruction: "x", outputSchema: "[1,2]" }
+  ]);
+  assert.equal(out[0].suggestedAction, "frontmatter");
+  assert.equal(out[0].outputSchema, '{"type":"object"}');
+  assert.equal(out[1].suggestedAction, "copy");
+  assert.equal("outputSchema" in out[1], false);
+  assert.equal("outputSchema" in out[2], false);
+  assert.equal("outputSchema" in out[3], false);
+});
+
 test("presetCommandId is prefixed", () => {
   assert.equal(presetCommandId(BUILTIN_PRESETS[1]), "preset-translate");
 });

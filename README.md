@@ -109,6 +109,28 @@ Settings -> Antigravity CLI:
 - **History** (clock icon) lists saved conversations; opening one restores the messages and
   resumes the native `agy` conversation. Stored in `history.json` in the plugin folder.
 
+### Structured output and frontmatter (Title + tags)
+
+A preset can carry an **output schema** (JSON Schema, editable in settings). Such a preset runs in
+its own one-shot `agy --json-schema` session, the CLI returns a parsed object, and the chat shows
+its fields (Title, Tags, ...). The **Apply to frontmatter** button merges them into the note's
+properties: `title` is set, `tags` are merged with existing ones (normalized: no `#`, lowercase,
+hyphenated), other scalar fields are added only if absent. The built-in **Title + tags** preset
+ships with a `{title, tags}` schema and suggests this action.
+
+### Batch: run a preset on a folder
+
+Right-click a folder in the file explorer -> **Antigravity: run preset on folder...**, or run the
+command **Run preset on folder...**. Pick the preset (note-capable ones only), whether to include
+subfolders, and how to write results: **Append to each note**, **New note per source note**, or
+**Into frontmatter** (schema presets only). Untick notes you want to skip, then **Start**.
+
+- Notes are processed one at a time, each in a fresh `agy` process (no context bleeds between
+  notes). Expect roughly 10-30 s per note including the CLI startup.
+- Results are written as soon as each note finishes; **Cancel batch** stops after the current one
+  and keeps what was done. Per-note errors are shown in the list and do not stop the batch.
+- Notes over 200k characters are skipped.
+
 ## Manual test checklist
 
 1. Settings -> **Test CLI** -> "Antigravity CLI 1.2.7 at ... N model(s) available."
@@ -121,6 +143,11 @@ Settings -> Antigravity CLI:
 7. Reopen a conversation from **History** after a restart -> it continues with context.
 8. Set a wrong executable path -> a clear "not found" error; sign out of agy -> a clear
    "not logged in" error.
+9. (0.2.0) Open a note, click **Title + tags** -> the reply shows Title/Tags fields; **Apply to
+   frontmatter** adds `title` and `tags` properties; the chat tab's normal replies stay free text.
+10. (0.2.0) Right-click a folder with 2-3 notes -> run **Summarize** with **Append** -> each note
+    gets a summary appended; run **Title + tags** with **Into frontmatter** -> properties filled;
+    cancel a batch mid-way -> finished notes keep their results and no `agy.exe` remains.
 
 ## Troubleshooting
 

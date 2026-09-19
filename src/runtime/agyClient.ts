@@ -165,8 +165,11 @@ export class AgyClient {
     }
   }
 
-  /** Build a session for one chat tab (not started). */
-  createSession(model: string, conversationId?: string): AgySession {
+  /**
+   * Build a session (not started). `jsonSchema` makes it a structured-output
+   * session; use a dedicated one per run since the flag is process-level.
+   */
+  createSession(model: string, conversationId?: string, extra: { jsonSchema?: string } = {}): AgySession {
     const cli = this.resolveCliPath();
     if (!cli) throw new Error(classifyFailure({ notFound: true }).message);
     const s = this.getSettings();
@@ -179,7 +182,8 @@ export class AgyClient {
       mode: "accept-edits",
       skipPermissions: s.toolAccess === "full",
       idleTimeoutMs: s.idleTimeoutMs > 0 ? s.idleTimeoutMs : undefined,
-      ...(conversationId ? { conversationId } : {})
+      ...(conversationId ? { conversationId } : {}),
+      ...(extra.jsonSchema ? { jsonSchema: extra.jsonSchema } : {})
     };
     return new AgySession(opts);
   }

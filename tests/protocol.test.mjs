@@ -131,6 +131,16 @@ test("result event carries status, per-turn response, cumulative usage and turn 
   assert.ok(second.usage.inputTokens > first.usage.inputTokens);
 });
 
+test("result exposes structured_output when the session used --json-schema", () => {
+  const ev = parseAgyLine(
+    '{"event":"result","result":{"conversation_id":"c","status":"SUCCESS","response":"{\\"tags\\":[\\"a\\"],\\"title\\":\\"T\\"}\\n","duration_seconds":4.2,"num_turns":2,"structured_output":{"tags":["a"],"title":"T"},"json_schema":{"type":"object"},"usage":{"input_tokens":1,"output_tokens":1,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":2}}}'
+  );
+  assert.equal(ev.kind, "result");
+  assert.deepEqual(ev.structured, { tags: ["a"], title: "T" });
+  const plain = parseAgyLine(lines("single-turn.ndjson")[4]);
+  assert.equal(plain.structured, undefined);
+});
+
 test("ERROR result surfaces the error string", () => {
   const ev = parseAgyLine(
     '{"event":"result","result":{"conversation_id":"e1","status":"ERROR","response":"","error":"stream input message is missing the \\"event\\" field","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}}'

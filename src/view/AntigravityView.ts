@@ -8,7 +8,8 @@ import { App, ItemView, MarkdownRenderer, Menu, Modal, Notice, WorkspaceLeaf, se
 import type AntigravityPlugin from "../main";
 import type { TurnContext } from "../main";
 import type { AgySession, ChatHandle } from "../runtime/agySession";
-import { assembleTurn, buildAppContext } from "../runtime/context";
+import { structuredToMarkdown } from "../runtime/batch";
+import { assembleTurn } from "../runtime/context";
 import type { NoteContext } from "../runtime/context";
 import { Conversation, StoredMessage, deriveTitle, lastMessagePreview, relativeTime, tabLabel } from "../runtime/history";
 import { Preset, ResultAction, presetApplicable, presetInstruction, presetTarget } from "../runtime/presets";
@@ -485,18 +486,16 @@ export class AntigravityView extends ItemView {
     this.statusEl.setText("Starting Antigravity...");
 
     const noteCtx: NoteContext = { notePath: ctx.notePath, selection: ctx.selection, noteContent: ctx.noteContent };
-    const s = this.plugin.settings;
-    const appContext = buildAppContext({
-      vaultPath: this.plugin.client.workingDir(),
-      outputLanguage: s.outputLanguage,
-      customPrompt: s.customSystemPrompt,
-      markdownReminder: s.markdownFormattingPromptEnabled,
-      fullAccess: s.toolAccess === "full"
-    });
-    const full = assembleTurn(userText, noteCtx, appContext);
+    const full = assembleTurn(userText, noteCtx, this.plugin.buildAppContextText());
 
     tab.messages.push({ role: "user", content: full });
     tab.uiMeta.push({ display: display ?? userText, ctx });
+
+    // A preset with an output schema runs in its own one-shot session: the
+    // --json-schema flag is process-level and would force JSON onto every
+    // later chat turn of the tab's long-lived process.
+    const schema = preset?.outputSchema;
+    let oneShot: AgySession | null = null;
 
     // Placeholder handle so Send shows Stop while the process starts.
     let starting = true;
@@ -504,6 +503,10 @@ export class AntigravityView extends ItemView {
       abort: () => {
         if (!starting) return;
         starting = false;
+        if (oneShot) {
+          oneShot.stop();
+          return;
+        }
         const sess = tab.session;
         tab.session = null;
         sess?.stop();
@@ -513,7 +516,13 @@ export class AntigravityView extends ItemView {
 
     let session: AgySession;
     try {
-      session = await this.ensureSession(tab);
+      if (schema) {
+        oneShot = this.plugin.client.createSession(tab.model, undefined, { jsonSchema: schema });
+        await oneShot.start();
+        session = oneShot;
+      } else {
+        session = await this.ensureSession(tab);
+      }
     } catch (e) {
       const msg = (e as Error).message || String(e);
       this.finishWithError(tab, assistant, msg);
@@ -521,6 +530,7 @@ export class AntigravityView extends ItemView {
     }
     if (!starting) {
       // Stopped while starting.
+      if (oneShot) void oneShot.close();
       this.finishWithError(tab, assistant, "Stopped.");
       return;
     }
@@ -531,6 +541,9 @@ export class AntigravityView extends ItemView {
       assistant.contentEl.empty();
       void MarkdownRenderer.render(this.app, buffer || "", assistant.contentEl, ctx.notePath || "", this);
       this.scrollToBottom(tab);
+    };
+    const releaseOneShot = () => {
+      if (oneShot) void oneShot.close();
     };
 
     try {
@@ -549,19 +562,27 @@ export class AntigravityView extends ItemView {
           if (tab.id === this.activeTabId) this.refreshMetaBar();
         },
         onError: (msg) => {
+          releaseOneShot();
           this.finishWithError(tab, assistant, msg, buffer);
         },
-        onDone: (conversationId) => {
-          if (conversationId) tab.conversationId = conversationId;
+        onDone: (conversationId, _response, structured) => {
+          releaseOneShot();
+          // Structured runs are one-shot: they do not own the tab's conversation.
+          if (conversationId && !oneShot) tab.conversationId = conversationId;
+          if (structured) {
+            buffer = structuredToMarkdown(structured) || buffer;
+            flush();
+          }
           tab.messages.push({ role: "assistant", content: buffer });
           tab.uiMeta.push(undefined);
           tab.handle = null;
-          this.renderResultActions(assistant, buffer, ctx, preset?.suggestedAction);
+          this.renderResultActions(assistant, buffer, ctx, preset?.suggestedAction, structured);
           this.refreshRunningState();
           this.saveTabHistory(tab);
         }
       });
     } catch (e) {
+      releaseOneShot();
       this.finishWithError(tab, assistant, (e as Error).message);
       return;
     }
@@ -651,11 +672,18 @@ export class AntigravityView extends ItemView {
     if (e.error) line.createSpan({ cls: "agy-tool-error", text: ` ${e.error}` });
   }
 
-  /** Copy / Insert / Replace / Append / New note buttons under a reply. */
-  private renderResultActions(assistant: AssistantEls, text: string, ctx?: TurnContext, suggested?: ResultAction): void {
+  /** Copy / Insert / Replace / Append / New note / Frontmatter buttons under a reply. */
+  private renderResultActions(
+    assistant: AssistantEls,
+    text: string,
+    ctx?: TurnContext,
+    suggested?: ResultAction,
+    structured?: Record<string, unknown>
+  ): void {
     assistant.actionsEl.empty();
-    if (!text.trim()) return;
+    if (!text.trim() && !structured) return;
     const actions: { id: ResultAction; label: string; icon: string; show: boolean }[] = [
+      { id: "frontmatter", label: "Apply to frontmatter", icon: "tags", show: !!structured },
       { id: "copy", label: "Copy", icon: "copy", show: true },
       { id: "insert", label: "Insert", icon: "text-cursor-input", show: true },
       { id: "replace", label: "Replace selection", icon: "replace", show: !!ctx?.selection },
@@ -669,7 +697,7 @@ export class AntigravityView extends ItemView {
       const icon = btn.createSpan({ cls: "agy-action-icon" });
       setIcon(icon, a.icon);
       btn.createSpan({ text: a.label });
-      btn.onclick = () => void this.plugin.applyResult(a.id, text, ctx ?? {});
+      btn.onclick = () => void this.plugin.applyResult(a.id, text, ctx ?? {}, structured);
     }
   }
 
