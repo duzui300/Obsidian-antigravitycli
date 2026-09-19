@@ -1,0 +1,10 @@
+{
+  "id": "antigravity-cli",
+  "name": "Antigravity CLI",
+  "version": "0.1.0",
+  "minAppVersion": "1.7.2",
+  "description": "Process notes with Gemini 3.8 Flash through the locally installed Antigravity CLI (agy). Summarize, translate, rewrite, or chat about the current note or selection and write the result back into your vault.",
+  "author": "Jason",
+  "authorUrl": "https://github.com/jsun2020",
+  "isDesktopOnly": true
+}

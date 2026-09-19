@@ -1,0 +1,32 @@
+{
+  "name": "antigravity-cli",
+  "version": "0.1.0",
+  "description": "Obsidian plugin: process notes with Gemini via the locally installed Antigravity CLI (agy).",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "build:test": "esbuild src/runtime/protocol.ts src/runtime/context.ts src/runtime/presets.ts src/runtime/history.ts src/runtime/cliLocator.ts src/runtime/agySession.ts --bundle --format=esm --platform=node --outdir=tests/.build --out-extension:.js=.mjs",
+    "test": "npm run build:test && node --test tests/",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "smoke": "node scripts/smoke-session.mjs"
+  },
+  "keywords": [
+    "obsidian",
+    "antigravity",
+    "gemini",
+    "agy"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.21.5",
+    "eslint": "^9.39.4",
+    "eslint-plugin-obsidianmd": "^0.3.0",
+    "obsidian": "latest",
+    "typescript": "^5.4.5",
+    "typescript-eslint": "^8.61.1"
+  }
+}
