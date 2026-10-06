@@ -12,7 +12,7 @@ import { structuredToMarkdown } from "../runtime/batch";
 import { assembleTurn } from "../runtime/context";
 import type { NoteContext } from "../runtime/context";
 import { Conversation, StoredMessage, deriveTitle, lastMessagePreview, relativeTime, tabLabel } from "../runtime/history";
-import { Preset, ResultAction, presetApplicable, presetInstruction, presetTarget } from "../runtime/presets";
+import { Preset, ResultAction, presetApplicable, presetIcon, presetInstruction, presetTarget } from "../runtime/presets";
 import { ToolEvent, UsageInfo, humanizeModel } from "../runtime/protocol";
 
 export const VIEW_TYPE_ANTIGRAVITY = "antigravity-chat";
@@ -46,10 +46,17 @@ interface MessageUiMeta {
 
 interface AssistantEls {
   msgEl: HTMLElement;
+  streamEl: HTMLElement;
   contentEl: HTMLElement;
+  /** Errors render here, outside contentEl, which the paint chain owns. */
+  errorEl: HTMLElement;
   toolsEl: HTMLElement;
   usageEl: HTMLElement;
   actionsEl: HTMLElement;
+  /** Cancels a queued animation-frame paint; set while the turn streams. */
+  cancelPending?: () => void;
+  /** Forces one last render of the buffered text and resolves when painted. */
+  finalize?: () => Promise<void>;
 }
 
 interface Tab {
@@ -68,6 +75,10 @@ interface Tab {
   lastUsage: UsageInfo | null;
   greeting?: string;
   historyId: string;
+  /** Follow new output only while the user is parked near the bottom. */
+  stickToBottom: boolean;
+  /** The in-flight assistant bubble, so Stop can settle it cleanly. */
+  pendingAssistant?: AssistantEls;
 }
 
 export class AntigravityView extends ItemView {
@@ -78,13 +89,21 @@ export class AntigravityView extends ItemView {
   private presetBarEl!: HTMLElement;
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
-  private includeNoteToggle!: HTMLInputElement;
-  private includeSelectionToggle!: HTMLInputElement;
+  private ctxNoteChipEl!: HTMLElement;
+  private ctxSelChipEl!: HTMLElement;
+  private scrollBtnEl!: HTMLButtonElement;
   private statusEl!: HTMLElement;
   private metaModelEl!: HTMLElement;
   private metaTokensEl!: HTMLElement;
   private accessChipEl!: HTMLElement;
   private accessLabelEl!: HTMLElement;
+
+  /** Whether the next turn attaches the current note / the selection. */
+  private includeNote = false;
+  private includeSelection = false;
+  /** What context actually exists right now (drives the chip states). */
+  private noteAvailable = false;
+  private selAvailable = false;
 
   private tabs: Tab[] = [];
   private activeTabId = "";
@@ -110,41 +129,71 @@ export class AntigravityView extends ItemView {
     root.empty();
     root.addClass("agy-view");
 
-    // Header
+    // ---- header ----
     const header = root.createDiv({ cls: "agy-header" });
-    header.createSpan({ cls: "agy-title", text: "Antigravity" });
+    const brand = header.createDiv({ cls: "agy-brand" });
+    const brandIcon = brand.createSpan({ cls: "agy-brand-icon" });
+    setIcon(brandIcon, "sparkles");
+    brand.createSpan({ cls: "agy-title", text: "Antigravity" });
+
     const headerActions = header.createDiv({ cls: "agy-header-actions" });
-    const historyBtn = headerActions.createEl("button", { cls: "agy-icon-btn", attr: { "aria-label": "Chat history" } });
+    const historyBtn = headerActions.createEl("button", {
+      cls: "agy-icon-btn",
+      attr: { "aria-label": "Chat history", title: "Chat history" }
+    });
     setIcon(historyBtn, "history");
     historyBtn.onclick = () => this.openHistory();
-    const newTabBtn = headerActions.createEl("button", { cls: "agy-icon-btn", attr: { "aria-label": "New tab" } });
+    const newTabBtn = headerActions.createEl("button", {
+      cls: "agy-icon-btn",
+      attr: { "aria-label": "New tab", title: "New tab" }
+    });
     setIcon(newTabBtn, "plus");
     newTabBtn.onclick = () => this.newTab();
 
-    // Tab bar
-    this.tabBarEl = root.createDiv({ cls: "agy-tabbar" });
+    // ---- tab bar ----
+    this.tabBarEl = root.createDiv({
+      cls: "agy-tabbar",
+      attr: { role: "tablist", "aria-label": "Chat tabs" }
+    });
+    this.tabBarEl.addEventListener("keydown", (e) => this.onTabBarKeydown(e));
 
-    // Body host (per-tab bodies live here)
+    // ---- transcript ----
     this.bodyHostEl = root.createDiv({ cls: "agy-body-host" });
+    this.scrollBtnEl = this.bodyHostEl.createEl("button", {
+      cls: "agy-scroll-btn",
+      attr: { "aria-label": "Scroll to latest", title: "Scroll to latest" }
+    });
+    setIcon(this.scrollBtnEl, "chevron-down");
+    this.scrollBtnEl.onclick = () => {
+      const tab = this.activeTab();
+      if (!tab) return;
+      tab.stickToBottom = true;
+      this.scrollToBottom(tab);
+      this.refreshScrollBtn();
+    };
 
-    // Preset bar
-    this.presetBarEl = root.createDiv({ cls: "agy-preset-bar" });
+    // ---- composer ----
+    const composer = root.createDiv({ cls: "agy-composer" });
+
+    this.presetBarEl = composer.createDiv({ cls: "agy-preset-bar" });
     this.renderPresetBar();
 
-    // Context toggles
-    const ctxRow = root.createDiv({ cls: "agy-context-row" });
-    const noteLabel = ctxRow.createEl("label", { cls: "agy-context-toggle" });
-    this.includeNoteToggle = noteLabel.createEl("input", { type: "checkbox" });
-    noteLabel.createSpan({ text: " current note" });
-    const selLabel = ctxRow.createEl("label", { cls: "agy-context-toggle" });
-    this.includeSelectionToggle = selLabel.createEl("input", { type: "checkbox" });
-    selLabel.createSpan({ text: " selection" });
+    const ctxRow = composer.createDiv({ cls: "agy-context-row" });
+    this.ctxNoteChipEl = this.createContextChip(ctxRow, "file-text", "Current note", () => {
+      if (!this.noteAvailable) return;
+      this.includeNote = !this.includeNote;
+      this.refreshContextChips();
+    });
+    this.ctxSelChipEl = this.createContextChip(ctxRow, "scissors", "Selection", () => {
+      if (!this.selAvailable) return;
+      this.includeSelection = !this.includeSelection;
+      this.refreshContextChips();
+    });
 
-    // Input
-    const inputWrap = root.createDiv({ cls: "agy-input-wrap" });
+    const inputWrap = composer.createDiv({ cls: "agy-input-wrap" });
     this.inputEl = inputWrap.createEl("textarea", {
       cls: "agy-input",
-      attr: { rows: "3", placeholder: "Message Antigravity..." }
+      attr: { rows: "1", placeholder: "Ask Antigravity, or pick a preset…" }
     });
     this.inputEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -152,15 +201,27 @@ export class AntigravityView extends ItemView {
         void this.onSend();
       }
     });
-    this.inputEl.addEventListener("input", () => this.plugin.touchSelectionActivity());
-    const inputActions = inputWrap.createDiv({ cls: "agy-input-actions" });
+    this.inputEl.addEventListener("input", () => {
+      this.autoGrowInput();
+      this.plugin.touchSelectionActivity();
+    });
 
     // Meta bar (model | tokens | access chip)
+    const inputActions = inputWrap.createDiv({ cls: "agy-input-actions" });
     const metaEl = inputActions.createDiv({ cls: "agy-input-meta" });
-    this.metaModelEl = metaEl.createDiv({ cls: "agy-meta-item agy-meta-model", attr: { "aria-label": "Model - click to switch" } });
+    this.metaModelEl = metaEl.createEl("button", {
+      cls: "agy-meta-item agy-meta-model",
+      attr: { title: "Switch model" }
+    });
     this.metaModelEl.onclick = (e) => this.showModelMenu(e);
-    this.metaTokensEl = metaEl.createDiv({ cls: "agy-meta-item agy-meta-tokens", attr: { "aria-label": "Tokens used by the last turn" } });
-    this.accessChipEl = metaEl.createDiv({ cls: "agy-access-chip" });
+    this.metaTokensEl = metaEl.createDiv({
+      cls: "agy-meta-item agy-meta-tokens",
+      attr: { "aria-label": "Tokens used by the last turn" }
+    });
+    this.accessChipEl = metaEl.createEl("button", {
+      cls: "agy-access-chip",
+      attr: { title: "Working folder and tool access - click to open settings" }
+    });
     const accessIcon = this.accessChipEl.createSpan({ cls: "agy-access-icon" });
     setIcon(accessIcon, "folder");
     this.accessLabelEl = this.accessChipEl.createSpan({ cls: "agy-access-label" });
@@ -176,8 +237,30 @@ export class AntigravityView extends ItemView {
 
     this.newTab();
     this.refreshMetaBar();
+    this.autoGrowInput();
     return Promise.resolve();
   }
+
+  /** One toggle chip in the composer's context row. */
+  private createContextChip(parent: HTMLElement, icon: string, label: string, onToggle: () => void): HTMLElement {
+    const chip = parent.createEl("button", {
+      cls: "agy-ctx-chip",
+      attr: { "aria-pressed": "false", title: `Attach the ${label.toLowerCase()} to your message` }
+    });
+    const iconEl = chip.createSpan({ cls: "agy-ctx-icon" });
+    setIcon(iconEl, icon);
+    chip.createSpan({ cls: "agy-ctx-label", text: label });
+    chip.onclick = onToggle;
+    return chip;
+  }
+
+  /** Keep the composer textarea sized to its content (up to a cap). */
+  private autoGrowInput(): void {
+    if (!this.inputEl) return;
+    this.inputEl.setCssStyles({ height: "auto" });
+    this.inputEl.setCssStyles({ height: `${Math.min(this.inputEl.scrollHeight, 180)}px` });
+  }
+
 
   async onClose(): Promise<void> {
     for (const t of this.tabs) {
@@ -198,7 +281,12 @@ export class AntigravityView extends ItemView {
     this.tabSeq += 1;
     const id = `tab-${Date.now()}-${this.tabSeq}`;
     const bodyEl = this.bodyHostEl.createDiv({ cls: "agy-body" });
-    const tabButtonEl = this.tabBarEl.createDiv({ cls: "agy-tab" });
+    bodyEl.id = `agy-panel-${id}`;
+    bodyEl.setAttr("role", "tabpanel");
+    const tabButtonEl = this.tabBarEl.createDiv({
+      cls: "agy-tab",
+      attr: { role: "tab", "aria-selected": "false", "aria-controls": bodyEl.id, tabindex: "-1" }
+    });
     const tab: Tab = {
       id,
       title: `Chat ${this.tabSeq}`,
@@ -210,14 +298,21 @@ export class AntigravityView extends ItemView {
       bodyEl,
       tabButtonEl,
       lastUsage: null,
-      historyId: id
+      historyId: id,
+      stickToBottom: true
     };
+    bodyEl.addEventListener("scroll", () => this.onBodyScroll(tab));
     this.renderGreeting(tab);
 
-    const label = tabButtonEl.createSpan({ cls: "agy-tab-label", text: tab.title });
-    label.onclick = () => this.activateTab(id);
-    const closeBtn = tabButtonEl.createSpan({ cls: "agy-tab-close" });
+    const dotEl = tabButtonEl.createSpan({ cls: "agy-tab-dot" });
+    dotEl.setAttr("aria-hidden", "true");
+    tabButtonEl.createSpan({ cls: "agy-tab-label", text: tab.title });
+    const closeBtn = tabButtonEl.createEl("button", {
+      cls: "agy-tab-close",
+      attr: { "aria-label": "Close tab", title: "Close tab" }
+    });
     setIcon(closeBtn, "x");
+    tabButtonEl.onclick = () => this.activateTab(id);
     closeBtn.onclick = (e) => {
       e.stopPropagation();
       void this.closeTab(id);
@@ -227,15 +322,37 @@ export class AntigravityView extends ItemView {
     this.activateTab(id);
   }
 
+  private setTabTitle(tab: Tab, title: string): void {
+    tab.title = title;
+    const labelEl = tab.tabButtonEl.querySelector<HTMLElement>(".agy-tab-label");
+    if (labelEl) labelEl.setText(title);
+    tab.tabButtonEl.setAttr("aria-label", title);
+  }
+
+  /** Left/Right move between tabs (the ARIA tablist convention). */
+  private onTabBarKeydown(e: KeyboardEvent): void {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const idx = this.tabs.findIndex((t) => t.id === this.activeTabId);
+    if (idx === -1) return;
+    e.preventDefault();
+    const step = e.key === "ArrowRight" ? 1 : -1;
+    const next = this.tabs[(idx + step + this.tabs.length) % this.tabs.length];
+    this.activateTab(next.id);
+    next.tabButtonEl.focus();
+  }
+
   private activateTab(id: string): void {
     this.activeTabId = id;
     for (const t of this.tabs) {
       const active = t.id === id;
       t.bodyEl.toggleClass("is-active", active);
       t.tabButtonEl.toggleClass("is-active", active);
+      t.tabButtonEl.setAttr("aria-selected", active ? "true" : "false");
+      t.tabButtonEl.setAttr("tabindex", active ? "0" : "-1");
     }
     this.refreshRunningState();
     this.refreshMetaBar();
+    this.refreshScrollBtn();
   }
 
   private async closeTab(id: string): Promise<void> {
@@ -269,7 +386,10 @@ export class AntigravityView extends ItemView {
     const running = !!this.activeTab()?.handle;
     this.sendBtn.setText(running ? "Stop" : "Send");
     this.sendBtn.classList.toggle("is-running", running);
-    this.statusEl.setText(running ? "Antigravity is working..." : "");
+    this.sendBtn.setAttr("aria-label", running ? "Stop the current reply" : "Send message");
+    this.statusEl.setText(running ? "Working…" : "");
+    // Mark every streaming tab, not just the active one.
+    for (const t of this.tabs) t.tabButtonEl.toggleClass("is-streaming", !!t.handle);
   }
 
   /** Refresh the footer meta bar and preset bar. Public so settings can refresh it live. */
@@ -298,9 +418,46 @@ export class AntigravityView extends ItemView {
     );
 
     this.renderPresetBar();
+    this.refreshContextChips();
   }
 
-  /** Empty-state greeting (kept stable per tab). */
+  /**
+   * Reflect what context actually exists: a chip is only usable (and only
+   * renders as "on") when the note/selection it needs is really there.
+   */
+  refreshContextChips(): void {
+    if (!this.ctxNoteChipEl) return;
+    const mdView = this.plugin.getActiveMarkdownView();
+    const sel = this.plugin.getCurrentSelection();
+    const selText = sel && sel.text.trim() ? sel.text : "";
+
+    this.noteAvailable = !!mdView;
+    this.selAvailable = !!selText;
+
+    this.updateContextChip(
+      this.ctxNoteChipEl,
+      this.includeNote && this.noteAvailable,
+      this.noteAvailable,
+      this.noteAvailable ? `Note: ${mdView?.file?.basename ?? "current"}` : "No note open"
+    );
+    this.updateContextChip(
+      this.ctxSelChipEl,
+      this.includeSelection && this.selAvailable,
+      this.selAvailable,
+      this.selAvailable ? `Selection: ${formatAttachmentSize(selText.length)}` : "No selection"
+    );
+  }
+
+  private updateContextChip(chip: HTMLElement, on: boolean, available: boolean, label: string): void {
+    chip.toggleClass("is-on", on);
+    chip.toggleClass("is-off", !available);
+    chip.setAttr("aria-pressed", on ? "true" : "false");
+    chip.setAttr("aria-disabled", available ? "false" : "true");
+    const labelEl = chip.querySelector<HTMLElement>(".agy-ctx-label");
+    if (labelEl && labelEl.textContent !== label) labelEl.setText(label);
+  }
+
+  /** Empty-state hero (kept stable per tab). */
   private renderGreeting(tab: Tab): void {
     if (tab.messages.length > 0) return;
     if (!tab.greeting) {
@@ -308,7 +465,26 @@ export class AntigravityView extends ItemView {
       tab.greeting = opts[Math.floor(Math.random() * opts.length)];
     }
     const wrap = tab.bodyEl.createDiv({ cls: "agy-greeting" });
+    const glyph = wrap.createDiv({ cls: "agy-greeting-glyph" });
+    setIcon(glyph, "sparkles");
     wrap.createDiv({ cls: "agy-greeting-text", text: tab.greeting });
+    wrap.createDiv({ cls: "agy-greeting-hint", text: this.greetingHint() });
+
+    const keys = wrap.createDiv({ cls: "agy-greeting-keys" });
+    for (const [key, what] of [
+      ["Enter", "send"],
+      ["Shift+Enter", "new line"]
+    ]) {
+      const row = keys.createSpan({ cls: "agy-keyhint" });
+      row.createEl("kbd", { text: key });
+      row.createSpan({ text: what });
+    }
+  }
+
+  private greetingHint(): string {
+    const presets = this.plugin.settings.presets.length;
+    if (presets > 0) return "Pick a preset above, attach a note, or just start typing.";
+    return "Ask anything about your vault, or add presets in settings.";
   }
 
   private clearGreeting(tab: Tab): void {
@@ -326,8 +502,12 @@ export class AntigravityView extends ItemView {
       return;
     }
     for (const preset of presets) {
-      const btn = this.presetBarEl.createEl("button", { cls: "agy-preset-btn", text: preset.name });
+      const btn = this.presetBarEl.createEl("button", { cls: "agy-preset-btn" });
+      const iconEl = btn.createSpan({ cls: "agy-preset-icon" });
+      setIcon(iconEl, presetIcon(preset));
+      btn.createSpan({ cls: "agy-preset-label", text: preset.name });
       btn.setAttr("aria-label", preset.instruction.length > 160 ? preset.instruction.slice(0, 157) + "..." : preset.instruction);
+      btn.setAttr("title", preset.instruction.length > 160 ? preset.instruction.slice(0, 157) + "..." : preset.instruction);
       btn.onclick = () => void this.runPreset(preset.id);
     }
   }
@@ -435,19 +615,20 @@ export class AntigravityView extends ItemView {
 
     const ctx: TurnContext = {};
     const mdView = this.plugin.getActiveMarkdownView();
-    if (this.includeNoteToggle.checked && mdView) {
+    if (this.includeNote && mdView) {
       ctx.notePath = mdView.file?.path;
       if (this.plugin.settings.includeNoteContent) ctx.noteContent = mdView.editor.getValue();
     }
-    if (this.includeSelectionToggle.checked) {
+    if (this.includeSelection) {
       const sel = this.plugin.getCurrentSelection();
-      if (sel) {
+      if (sel && sel.text.trim()) {
         ctx.selection = sel.text;
         ctx.selectionRange = sel.range;
         if (!ctx.notePath) ctx.notePath = sel.notePath;
       }
     }
     this.inputEl.value = "";
+    this.autoGrowInput();
     await this.runTurn(text, ctx, text);
   }
 
@@ -483,7 +664,8 @@ export class AntigravityView extends ItemView {
     this.clearGreeting(tab);
     this.renderUserMessage(tab, display ?? userText, ctx);
     const assistant = this.createAssistantMessage(tab);
-    this.statusEl.setText("Starting Antigravity...");
+    tab.pendingAssistant = assistant;
+    this.statusEl.setText("Starting…");
 
     const noteCtx: NoteContext = { notePath: ctx.notePath, selection: ctx.selection, noteContent: ctx.noteContent };
     const full = assembleTurn(userText, noteCtx, this.plugin.buildAppContextText());
@@ -537,11 +719,41 @@ export class AntigravityView extends ItemView {
     starting = false;
 
     let buffer = "";
-    const flush = () => {
-      assistant.contentEl.empty();
-      void MarkdownRenderer.render(this.app, buffer || "", assistant.contentEl, ctx.notePath || "", this);
-      this.scrollToBottom(tab);
+    let lastRendered = "";
+    let chain: Promise<void> = Promise.resolve();
+    let frame: number | null = null;
+
+    // Serialized, frame-throttled Markdown rendering. Deltas arrive far faster
+    // than the renderer can keep up, and every render re-parses the whole
+    // buffer: overlapping renders would both be quadratic and able to
+    // interleave their output into the same element.
+    const paint = (force = false): Promise<void> => {
+      chain = chain.then(async () => {
+        const text = buffer;
+        if (!force && text === lastRendered) return;
+        lastRendered = text;
+        assistant.contentEl.empty();
+        await MarkdownRenderer.render(this.app, text, assistant.contentEl, ctx.notePath || "", this);
+        if (tab.stickToBottom) this.scrollToBottom(tab);
+      });
+      return chain;
     };
+    const schedulePaint = (): void => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        void paint();
+      });
+    };
+    const cancelPaint = (): void => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+        frame = null;
+      }
+    };
+    assistant.cancelPending = cancelPaint;
+    assistant.finalize = () => paint(true);
+
     const releaseOneShot = () => {
       if (oneShot) void oneShot.close();
     };
@@ -550,15 +762,16 @@ export class AntigravityView extends ItemView {
       tab.handle = session.send(full, {
         onChunk: (t) => {
           buffer += t;
-          flush();
+          assistant.streamEl.addClass("agy-hidden");
+          schedulePaint();
         },
         onToolEvent: (e: ToolEvent) => {
           this.renderToolEvent(assistant, e);
-          this.scrollToBottom(tab);
+          if (tab.stickToBottom) this.scrollToBottom(tab);
         },
         onUsage: (u: UsageInfo) => {
           tab.lastUsage = u;
-          assistant.usageEl.setText(`tokens: in ${u.inputTokens.toLocaleString()} / out ${u.outputTokens.toLocaleString()}`);
+          assistant.usageEl.setText(`in ${u.inputTokens.toLocaleString()} / out ${u.outputTokens.toLocaleString()}`);
           if (tab.id === this.activeTabId) this.refreshMetaBar();
         },
         onError: (msg) => {
@@ -567,18 +780,22 @@ export class AntigravityView extends ItemView {
         },
         onDone: (conversationId, _response, structured) => {
           releaseOneShot();
+          cancelPaint();
           // Structured runs are one-shot: they do not own the tab's conversation.
           if (conversationId && !oneShot) tab.conversationId = conversationId;
-          if (structured) {
-            buffer = structuredToMarkdown(structured) || buffer;
-            flush();
-          }
+          if (structured) buffer = structuredToMarkdown(structured) || buffer;
           tab.messages.push({ role: "assistant", content: buffer });
           tab.uiMeta.push(undefined);
           tab.handle = null;
-          this.renderResultActions(assistant, buffer, ctx, preset?.suggestedAction, structured);
-          this.refreshRunningState();
-          this.saveTabHistory(tab);
+          tab.pendingAssistant = undefined;
+          // Settle the final text before wiring the action buttons underneath.
+          void paint(true).then(() => {
+            assistant.cancelPending = undefined;
+            this.renderResultActions(assistant, buffer, ctx, preset?.suggestedAction, structured);
+            this.refreshRunningState();
+            this.refreshScrollBtn();
+            this.saveTabHistory(tab);
+          });
         }
       });
     } catch (e) {
@@ -590,42 +807,72 @@ export class AntigravityView extends ItemView {
   }
 
   private finishWithError(tab: Tab, assistant: AssistantEls, msg: string, partial = ""): void {
-    if (partial.trim()) {
-      // Keep whatever streamed before the failure, then show the error under it.
-      assistant.contentEl.createDiv({ cls: "agy-error", text: msg });
-      this.renderResultActions(assistant, partial, undefined);
-    } else {
-      assistant.contentEl.empty();
-      assistant.contentEl.createDiv({ cls: "agy-error", text: msg });
-    }
+    assistant.cancelPending?.();
+    assistant.streamEl.addClass("agy-hidden");
+    // The error lives outside contentEl, which the render chain still owns, so a
+    // late render of the partial reply cannot wipe it.
+    assistant.errorEl.createDiv({ cls: "agy-error", text: msg });
     tab.handle = null;
+    tab.pendingAssistant = undefined;
     tab.messages.push({ role: "assistant", content: partial ? `${partial}\n\n[error] ${msg}` : `[error] ${msg}` });
     tab.uiMeta.push(undefined);
     this.refreshRunningState();
-    this.scrollToBottom(tab);
+    if (tab.stickToBottom) this.scrollToBottom(tab);
+    this.refreshScrollBtn();
+
+    const finalize = assistant.finalize;
+    assistant.finalize = undefined;
+    assistant.cancelPending = undefined;
+    if (partial.trim() && finalize) {
+      void finalize().then(() => {
+        this.renderResultActions(assistant, partial, undefined);
+        this.refreshScrollBtn();
+      });
+    }
     this.saveTabHistory(tab);
   }
 
   private stopActive(): void {
     const tab = this.activeTab();
-    if (tab?.handle) {
-      tab.handle.abort();
-      tab.handle = null;
-      // The process is gone; the conversation id survives for the next turn.
-      tab.session = null;
-      this.refreshRunningState();
-      this.statusEl.setText("Stopped.");
+    if (!tab?.handle) return;
+    tab.handle.abort();
+    tab.handle = null;
+    // The process is gone; the conversation id survives for the next turn.
+    tab.session = null;
+
+    // Settle the bubble the stopped turn was streaming into: keep the partial
+    // text on screen and drop the spinner instead of leaving it spinning.
+    const assistant = tab.pendingAssistant;
+    tab.pendingAssistant = undefined;
+    if (assistant) {
+      assistant.cancelPending?.();
+      assistant.streamEl.addClass("agy-hidden");
+      const finalize = assistant.finalize;
+      assistant.finalize = undefined;
+      assistant.cancelPending = undefined;
+      if (finalize) void finalize();
     }
+    this.refreshRunningState();
+    this.statusEl.setText("Stopped.");
   }
 
   // ---- rendering helpers ----
 
+  /** Role header with an avatar glyph, shared by user and assistant bubbles. */
+  private renderMessageHead(parent: HTMLElement, role: "user" | "assistant"): void {
+    const head = parent.createDiv({ cls: "agy-msg-head" });
+    const avatar = head.createSpan({ cls: `agy-avatar agy-avatar-${role}` });
+    avatar.setAttr("aria-hidden", "true");
+    setIcon(avatar, role === "user" ? "user" : "sparkles");
+    head.createSpan({ cls: "agy-msg-role", text: role === "user" ? "You" : "Antigravity" });
+  }
+
   private renderUserMessage(tab: Tab, text: string, ctx?: TurnContext): void {
     const msg = tab.bodyEl.createDiv({ cls: "agy-msg agy-msg-user" });
-    msg.createDiv({ cls: "agy-msg-role", text: "You" });
+    this.renderMessageHead(msg, "user");
     msg.createDiv({ cls: "agy-msg-content", text });
     if (ctx) this.renderAttachments(msg, ctx);
-    this.scrollToBottom(tab);
+    if (tab.stickToBottom) this.scrollToBottom(tab);
   }
 
   private renderAttachments(msg: HTMLElement, ctx: TurnContext): void {
@@ -639,24 +886,36 @@ export class AntigravityView extends ItemView {
     }
     for (const chip of chips) {
       const wrap = msg.createDiv({ cls: "agy-attachment" });
-      const titleEl = wrap.createDiv({ cls: "agy-attachment-title", text: `> ${chip.label}` });
+      const titleEl = wrap.createEl("button", { cls: "agy-attachment-title", attr: { "aria-expanded": "false" } });
+      const caret = titleEl.createSpan({ cls: "agy-attachment-caret" });
+      caret.setAttr("aria-hidden", "true");
+      setIcon(caret, "chevron-right");
+      titleEl.createSpan({ cls: "agy-attachment-label", text: chip.label });
       const bodyEl = wrap.createDiv({ cls: "agy-attachment-body" });
       bodyEl.setText(chip.body);
-      titleEl.addEventListener("click", () => {
+      titleEl.onclick = () => {
         const expanded = wrap.classList.toggle("is-expanded");
-        titleEl.setText(`${expanded ? "v" : ">"} ${chip.label}`);
-      });
+        titleEl.setAttr("aria-expanded", expanded ? "true" : "false");
+      };
     }
   }
 
   private createAssistantMessage(tab: Tab): AssistantEls {
     const msgEl = tab.bodyEl.createDiv({ cls: "agy-msg agy-msg-assistant" });
-    msgEl.createDiv({ cls: "agy-msg-role", text: "Antigravity" });
+    this.renderMessageHead(msgEl, "assistant");
     const toolsEl = msgEl.createDiv({ cls: "agy-tools" });
+    // Shown until the first token lands, so the CLI's several-second startup
+    // reads as "working" rather than as an empty reply.
+    const streamEl = msgEl.createDiv({ cls: "agy-streaming", attr: { "aria-label": "Antigravity is thinking" } });
+    for (let i = 0; i < 3; i++) {
+      const dot = streamEl.createSpan({ cls: "agy-streaming-dot" });
+      dot.setAttr("aria-hidden", "true");
+    }
     const contentEl = msgEl.createDiv({ cls: "agy-msg-content" });
+    const errorEl = msgEl.createDiv({ cls: "agy-msg-error" });
     const usageEl = msgEl.createDiv({ cls: "agy-usage" });
     const actionsEl = msgEl.createDiv({ cls: "agy-actions" });
-    return { msgEl, contentEl, toolsEl, usageEl, actionsEl };
+    return { msgEl, streamEl, contentEl, errorEl, toolsEl, usageEl, actionsEl };
   }
 
   private renderToolEvent(assistant: AssistantEls, e: ToolEvent): void {
@@ -692,17 +951,38 @@ export class AntigravityView extends ItemView {
     ];
     for (const a of actions) {
       if (!a.show) continue;
-      const btn = assistant.actionsEl.createEl("button", { cls: "agy-action-btn" });
+      const btn = assistant.actionsEl.createEl("button", { cls: "agy-action-btn", attr: { title: a.label } });
       if (a.id === suggested) btn.addClass("is-suggested");
       const icon = btn.createSpan({ cls: "agy-action-icon" });
       setIcon(icon, a.icon);
-      btn.createSpan({ text: a.label });
+      btn.createSpan({ cls: "agy-action-label", text: a.label });
       btn.onclick = () => void this.plugin.applyResult(a.id, text, ctx ?? {}, structured);
     }
   }
 
+  // ---- scrolling ----
+
   private scrollToBottom(tab: Tab): void {
     tab.bodyEl.scrollTop = tab.bodyEl.scrollHeight;
+  }
+
+  /** True while the transcript is parked at (or very near) the bottom. */
+  private isNearBottom(tab: Tab): boolean {
+    const el = tab.bodyEl;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= 32;
+  }
+
+  private onBodyScroll(tab: Tab): void {
+    tab.stickToBottom = this.isNearBottom(tab);
+    if (tab.id === this.activeTabId) this.refreshScrollBtn();
+  }
+
+  /** Offer "jump to latest" only when the active transcript is scrolled up. */
+  private refreshScrollBtn(): void {
+    if (!this.scrollBtnEl) return;
+    const tab = this.activeTab();
+    const show = !!tab && tab.messages.length > 0 && !this.isNearBottom(tab);
+    this.scrollBtnEl.toggleClass("is-visible", show);
   }
 
   // ---- chat history ----
@@ -726,9 +1006,12 @@ export class AntigravityView extends ItemView {
       }
       return stored;
     });
+    const title = deriveTitle(messages);
+    // Keep the tab bar and the history list showing the same name.
+    if (title !== tab.title) this.setTabTitle(tab, tabLabel(title));
     const entry: Conversation = {
       id: tab.historyId,
-      title: deriveTitle(messages),
+      title,
       updatedAt: Date.now(),
       messages
     };
@@ -774,9 +1057,7 @@ export class AntigravityView extends ItemView {
     if (conv.model) tab.model = conv.model;
     tab.historyId = conv.id;
     tab.lastUsage = null;
-    tab.title = tabLabel(conv.title);
-    const labelEl = tab.tabButtonEl.querySelector(".agy-tab-label");
-    if (labelEl) labelEl.setText(tab.title);
+    this.setTabTitle(tab, tabLabel(conv.title));
 
     this.renderRestoredMessages(tab);
     this.activateTab(tab.id);
@@ -789,16 +1070,18 @@ export class AntigravityView extends ItemView {
         this.renderUserMessage(tab, meta?.display ?? m.content, meta?.ctx);
       } else if (m.role === "assistant") {
         const assistant = this.createAssistantMessage(tab);
+        assistant.streamEl.addClass("agy-hidden");
         const content = m.content || "";
         const errIdx = content.indexOf("[error] ");
         const body = errIdx >= 0 ? content.slice(0, errIdx).trim() : content;
         if (body) void MarkdownRenderer.render(this.app, body, assistant.contentEl, "", this);
-        if (errIdx >= 0) assistant.contentEl.createDiv({ cls: "agy-error", text: content.slice(errIdx + "[error] ".length) });
+        if (errIdx >= 0) assistant.errorEl.createDiv({ cls: "agy-error", text: content.slice(errIdx + "[error] ".length) });
         const userMeta = i > 0 ? tab.uiMeta[i - 1] : undefined;
         if (body) this.renderResultActions(assistant, body, userMeta?.ctx);
       }
     });
     this.scrollToBottom(tab);
+    tab.stickToBottom = true;
   }
 }
 
@@ -826,7 +1109,7 @@ class HistoryModal extends Modal {
       emptyEl.toggleClass("agy-hidden", items.length > 0);
       const now = Date.now();
       for (const conv of items) {
-        const row = listEl.createDiv({ cls: "agy-history-row" });
+        const row = listEl.createDiv({ cls: "agy-history-row", attr: { role: "button", tabindex: "0" } });
         const main = row.createDiv({ cls: "agy-history-main" });
         main.createDiv({ cls: "agy-history-title", text: conv.title });
         const preview = lastMessagePreview(conv.messages);
@@ -835,11 +1118,22 @@ class HistoryModal extends Modal {
           cls: "agy-history-meta",
           text: `${relativeTime(now, conv.updatedAt)} - ${conv.messages.length} messages${conv.model ? ` - ${humanizeModel(conv.model)}` : ""}`
         });
-        main.onclick = () => {
+        const open = (): void => {
           this.view.restoreConversation(conv.id);
           this.close();
         };
-        const del = row.createSpan({ cls: "agy-history-del", attr: { "aria-label": "Delete" } });
+        row.onclick = open;
+        row.addEventListener("keydown", (e) => {
+          // Ignore keys aimed at the delete button nested in this row.
+          if (e.target !== row) return;
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          open();
+        });
+        const del = row.createEl("button", {
+          cls: "agy-history-del",
+          attr: { "aria-label": `Delete ${conv.title}`, title: "Delete" }
+        });
         setIcon(del, "trash");
         del.onclick = async (e) => {
           e.stopPropagation();

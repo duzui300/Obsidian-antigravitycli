@@ -243,6 +243,7 @@ export default class AntigravityPlugin extends Plugin {
   private setSelectionSnapshot(snap: SelectionSnapshot): void {
     this.lastSelectionSnapshot = snap;
     this.scheduleSelectionExpiry();
+    this.refreshContextChipsInViews();
   }
 
   private scheduleSelectionExpiry(): void {
@@ -250,7 +251,16 @@ export default class AntigravityPlugin extends Plugin {
     this.selectionExpiryTimer = window.setTimeout(() => {
       this.lastSelectionSnapshot = null;
       this.selectionExpiryTimer = null;
+      this.refreshContextChipsInViews();
     }, AntigravityPlugin.SELECTION_EXPIRY_MS);
+  }
+
+  /** Keep the chat views' context chips honest about what is attached. */
+  private refreshContextChipsInViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_ANTIGRAVITY)) {
+      const view = leaf.view;
+      if (view instanceof AntigravityView) view.refreshContextChips();
+    }
   }
 
   /** Typing in the chat keeps a pending selection snapshot alive. */

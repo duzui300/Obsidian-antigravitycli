@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type AntigravityPlugin from "../main";
-import { BUILTIN_PRESETS, Preset, PresetTarget, ResultAction, normalizeSchema, slugifyPresetId } from "../runtime/presets";
+import { BUILTIN_PRESETS, Preset, PresetTarget, ResultAction, normalizePresetIcon, normalizeSchema, slugifyPresetId } from "../runtime/presets";
 import { humanizeModel } from "../runtime/protocol";
 import type { OutputLanguage } from "../runtime/context";
 import type { ToolAccess } from "./types";
@@ -339,6 +339,22 @@ export class AntigravitySettingTab extends PluginSettingTab {
       ta.inputEl.addClass("agy-settings-textarea");
       return ta;
     });
+    new Setting(box)
+      .setName("Icon")
+      .setDesc("Optional Lucide icon name shown on the preset button (e.g. sparkles, tags, languages).")
+      .addText((text) => {
+        text
+          .setPlaceholder("sparkles")
+          .setValue(preset.icon ?? "")
+          .onChange(async (v) => {
+            const icon = normalizePresetIcon(v);
+            if (icon) preset.icon = icon;
+            else delete preset.icon;
+            await this.plugin.saveSettings();
+            this.plugin.refreshOpenViews();
+          });
+        return text;
+      });
     new Setting(box)
       .setName("Output schema (optional)")
       .setDesc("JSON Schema for structured output. When set, the preset runs with --json-schema and the reply's fields (title, tags, ...) can be applied to the note's frontmatter. Leave empty for free text.")
