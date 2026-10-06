@@ -11,7 +11,11 @@ import { normalizePresets, presetApplicable, presetCommandId, ResultAction } fro
 import { parseModelsOutput } from "./runtime/protocol";
 import { Conversation, parseHistoryFile, removeConversation, serializeHistoryFile, upsertConversation } from "./runtime/history";
 
-/** Bundled-build marker (checked after deploy per project rules). */
+/**
+ * Baked into the bundle and compared against manifest.json on load, so a stale
+ * main.js (not rebuilt after a version bump) is reported instead of quietly
+ * running last version's code.
+ */
 export const ANTIGRAVITY_PLUGIN_VERSION = "0.2.1";
 
 /** Editor range of a selection, so "Replace selection" can target it later. */
@@ -55,6 +59,12 @@ export default class AntigravityPlugin extends Plugin {
   private static readonly SELECTION_EXPIRY_MS = 5000;
 
   async onload(): Promise<void> {
+    if (this.manifest.version !== ANTIGRAVITY_PLUGIN_VERSION) {
+      console.warn(
+        `Antigravity CLI: main.js is from ${ANTIGRAVITY_PLUGIN_VERSION} but manifest.json says ` +
+          `${this.manifest.version} - the bundle is stale; run "npm run build".`
+      );
+    }
     await this.loadSettings();
     await this.loadHistory();
     this.client = new AgyClient(
@@ -291,7 +301,10 @@ export default class AntigravityPlugin extends Plugin {
       /* no editor in this mode */
     }
     try {
-      const domSel = window.getSelection();
+      // Read through the view's own window: a leaf in a popout window lives in a
+      // different document, where the global window.getSelection() sees nothing.
+      const win = view.containerEl.ownerDocument.defaultView;
+      const domSel = win?.getSelection() ?? null;
       if (domSel && !domSel.isCollapsed && domSel.rangeCount > 0) {
         const r = domSel.getRangeAt(0);
         if (view.containerEl.contains(r.commonAncestorContainer)) {
