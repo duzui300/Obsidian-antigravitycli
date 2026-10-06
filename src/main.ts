@@ -16,7 +16,7 @@ import { Conversation, parseHistoryFile, removeConversation, serializeHistoryFil
  * main.js (not rebuilt after a version bump) is reported instead of quietly
  * running last version's code.
  */
-export const ANTIGRAVITY_PLUGIN_VERSION = "0.2.1";
+export const ANTIGRAVITY_PLUGIN_VERSION = "0.2.2";
 
 /** Editor range of a selection, so "Replace selection" can target it later. */
 export interface SelectionRange {
