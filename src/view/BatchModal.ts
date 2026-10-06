@@ -8,13 +8,30 @@
 import { App, Modal, Notice, Setting, TFile, TFolder, setIcon } from "obsidian";
 import type AntigravityPlugin from "../main";
 import type { AgySession } from "../runtime/agySession";
-import { BATCH_MAX_CHARS, BatchItem, BatchOutput, selectBatchNotes, structuredToMarkdown, summarizeBatch } from "../runtime/batch";
+import { BATCH_MAX_CHARS, BatchItem, BatchItemStatus, BatchOutput, selectBatchNotes, structuredToMarkdown, summarizeBatch } from "../runtime/batch";
 import { assembleTurn } from "../runtime/context";
 import { Preset, presetInstruction } from "../runtime/presets";
 
 interface TurnOutcome {
   text: string;
   structured?: Record<string, unknown>;
+}
+
+/** Icon for a batch row's status marker. */
+function batchIcon(status: BatchItemStatus): string {
+  switch (status) {
+    case "done":
+      return "check";
+    case "error":
+      return "x";
+    case "running":
+      return "loader";
+    case "skipped":
+    case "cancelled":
+      return "minus";
+    default:
+      return "circle";
+  }
 }
 
 export class BatchModal extends Modal {
@@ -29,6 +46,8 @@ export class BatchModal extends Modal {
   private running = false;
   private cancelled = false;
   private current: AgySession | null = null;
+  /** Releases the in-flight runOne promise when the batch is cancelled. */
+  private cancelSignal: (() => void) | null = null;
 
   private formEl!: HTMLElement;
   private listEl!: HTMLElement;
@@ -175,8 +194,11 @@ export class BatchModal extends Modal {
       return;
     }
     for (const item of this.items) {
-      const row = this.listEl.createDiv({ cls: `agy-batch-row agy-batch-${item.status}` });
-      const cb = row.createEl("input", { type: "checkbox" });
+      const row = this.listEl.createDiv({
+        cls: `agy-batch-row agy-batch-${item.status}`,
+        attr: { "data-path": item.path }
+      });
+      const cb = row.createEl("input", { type: "checkbox", attr: { "aria-label": item.path } });
       cb.checked = !this.excluded.has(item.path);
       cb.disabled = this.running;
       cb.onchange = () => {
@@ -185,9 +207,31 @@ export class BatchModal extends Modal {
         this.refreshButtons();
       };
       const icon = row.createSpan({ cls: "agy-batch-icon" });
-      setIcon(icon, item.status === "done" ? "check" : item.status === "error" ? "x" : item.status === "running" ? "loader" : item.status === "skipped" || item.status === "cancelled" ? "minus" : "circle");
+      setIcon(icon, batchIcon(item.status));
       row.createSpan({ cls: "agy-batch-path", text: item.path });
       if (item.detail) row.createSpan({ cls: "agy-batch-detail", text: item.detail });
+    }
+  }
+
+  /**
+   * Update one row in place. Re-rendering the whole list on every status change
+   * would reset its scroll position, making a long batch impossible to watch.
+   */
+  private updateRow(item: BatchItem): void {
+    const row = this.listEl.querySelector<HTMLElement>(`[data-path="${CSS.escape(item.path)}"]`);
+    if (!row) {
+      this.renderList();
+      return;
+    }
+    row.className = `agy-batch-row agy-batch-${item.status}`;
+    const icon = row.querySelector<HTMLElement>(".agy-batch-icon");
+    if (icon) setIcon(icon, batchIcon(item.status));
+    const detail = row.querySelector<HTMLElement>(".agy-batch-detail");
+    if (item.detail) {
+      if (detail) detail.setText(item.detail);
+      else row.createSpan({ cls: "agy-batch-detail", text: item.detail });
+    } else if (detail) {
+      detail.remove();
     }
   }
 
@@ -212,6 +256,10 @@ export class BatchModal extends Modal {
       return;
     }
     this.cancelled = true;
+    // AgySession.stop() deliberately fires no callbacks, so release the
+    // in-flight turn explicitly - otherwise runOne's promise never settles and
+    // the batch loop waits on it forever.
+    this.cancelSignal?.();
     this.current?.stop();
     this.summaryEl.setText("Cancelling after the current note...");
   }
@@ -232,34 +280,38 @@ export class BatchModal extends Modal {
       if (this.excluded.has(item.path)) {
         item.status = "skipped";
         item.detail = "unchecked";
+        this.updateRow(item);
         continue;
       }
       if (this.cancelled) {
         item.status = "cancelled";
+        this.updateRow(item);
         continue;
       }
       const file = this.candidates.find((f) => f.path === item.path);
       if (!file) {
         item.status = "error";
         item.detail = "file missing";
+        this.updateRow(item);
         continue;
       }
       item.status = "running";
-      this.renderList();
+      this.updateRow(item);
       this.summaryEl.setText(`Processing ${file.basename}...`);
       try {
         const content = await this.app.vault.cachedRead(file);
         if (content.length > BATCH_MAX_CHARS) {
           item.status = "skipped";
           item.detail = `over ${Math.round(BATCH_MAX_CHARS / 1000)}k chars`;
-          this.renderList();
+          this.updateRow(item);
           continue;
         }
         const prompt = assembleTurn(userText, { notePath: file.path, noteContent: content }, appContext);
         const outcome = await this.runOne(model, preset, prompt);
-        if (this.cancelled && !outcome) {
+        if (!outcome) {
+          // Cancelled while this note was in flight.
           item.status = "cancelled";
-          this.renderList();
+          this.updateRow(item);
           continue;
         }
         await this.writeOutcome(file, outcome);
@@ -269,7 +321,7 @@ export class BatchModal extends Modal {
         item.status = this.cancelled ? "cancelled" : "error";
         item.detail = (e as Error).message;
       }
-      this.renderList();
+      this.updateRow(item);
     }
 
     this.running = false;
@@ -281,21 +333,33 @@ export class BatchModal extends Modal {
     new Notice(`Antigravity batch: ${summary}.`);
   }
 
-  /** One fresh session, one turn, closed afterwards. Resolves to the reply. */
-  private async runOne(model: string, preset: Preset, prompt: string): Promise<TurnOutcome> {
+  /**
+   * One fresh session, one turn, closed afterwards. Resolves to the reply, or
+   * to null when the batch was cancelled mid-turn.
+   */
+  private async runOne(model: string, preset: Preset, prompt: string): Promise<TurnOutcome | null> {
     const session = this.plugin.client.createSession(model, undefined, preset.outputSchema ? { jsonSchema: preset.outputSchema } : {});
     this.current = session;
     try {
       await session.start();
-      return await new Promise<TurnOutcome>((resolve, reject) => {
+      return await new Promise<TurnOutcome | null>((resolve, reject) => {
         let text = "";
+        let settled = false;
+        const settle = (finish: () => void): void => {
+          if (settled) return;
+          settled = true;
+          this.cancelSignal = null;
+          finish();
+        };
+        this.cancelSignal = () => settle(() => resolve(null));
         session.send(prompt, {
           onChunk: (t) => (text += t),
-          onError: (m) => reject(new Error(m)),
-          onDone: (_id, _response, structured) => resolve({ text, ...(structured ? { structured } : {}) })
+          onError: (m) => settle(() => reject(new Error(m))),
+          onDone: (_id, _response, structured) => settle(() => resolve({ text, ...(structured ? { structured } : {}) }))
         });
       });
     } finally {
+      this.cancelSignal = null;
       this.current = null;
       await session.close();
     }

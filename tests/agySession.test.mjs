@@ -255,6 +255,30 @@ test("abort via the handle kills the tree and suppresses later callbacks", async
   assert.equal(session.conversationId, CONV, "conversation id survives a stop for later resume");
 });
 
+test("stop() during a turn is silent, so the caller owns the outcome", async () => {
+  // BatchModal awaits a promise that only onDone/onError settle, and cancels by
+  // calling stop(). It therefore has to release that promise itself; this test
+  // pins the contract that makes that necessary.
+  const { child, session, killed } = makeSession();
+  const p = session.start();
+  child.line(init());
+  await p;
+  const calls = [];
+  session.send("go", {
+    onChunk: () => calls.push("chunk"),
+    onError: () => calls.push("error"),
+    onDone: () => calls.push("done")
+  });
+  child.line(step({ step_index: 1, state: "ACTIVE", step_type: "agent_response", text_delta: "partial" }));
+  await tick();
+  session.stop();
+  child.exit(1);
+  await tick();
+  assert.deepEqual(calls, ["chunk"], "no onError/onDone fires after an explicit stop");
+  assert.equal(killed.length, 1);
+  assert.equal(session.alive, false);
+});
+
 test("process exit mid-turn reports stderr and exit code", async () => {
   const { child, session } = makeSession();
   const p = session.start();
