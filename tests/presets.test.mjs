@@ -2,8 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   BUILTIN_PRESETS,
+  DEFAULT_PRESET_ICON,
+  normalizePresetIcon,
   normalizePresets,
   presetApplicable,
+  presetIcon,
   presetTarget,
   presetInstruction,
   presetCommandId,
@@ -107,3 +110,37 @@ test("normalizePresets validates outputSchema and demotes frontmatter without on
 test("presetCommandId is prefixed", () => {
   assert.equal(presetCommandId(BUILTIN_PRESETS[1]), "preset-translate");
 });
+
+test("built-in presets each carry a distinct icon", () => {
+  const icons = BUILTIN_PRESETS.map(presetIcon);
+  assert.equal(icons.filter((i) => i === DEFAULT_PRESET_ICON).length, 0, "built-ins name their own icon");
+  assert.equal(new Set(icons).size, icons.length);
+});
+
+test("presetIcon falls back for presets without a usable icon", () => {
+  assert.equal(presetIcon({ name: "x", instruction: "y" }), DEFAULT_PRESET_ICON);
+  assert.equal(presetIcon({ name: "x", instruction: "y", icon: "" }), DEFAULT_PRESET_ICON);
+  assert.equal(presetIcon({ name: "x", instruction: "y", icon: "tags" }), "tags");
+});
+
+test("normalizePresetIcon keeps kebab-case names and drops junk", () => {
+  assert.equal(normalizePresetIcon("Book-Open"), "book-open");
+  assert.equal(normalizePresetIcon("  tags  "), "tags");
+  assert.equal(normalizePresetIcon(""), undefined);
+  assert.equal(normalizePresetIcon("has space"), undefined);
+  assert.equal(normalizePresetIcon("<img src=x>"), undefined);
+  assert.equal(normalizePresetIcon(42), undefined);
+  assert.equal(normalizePresetIcon(null), undefined);
+});
+
+test("normalizePresets carries a valid icon through and omits an invalid one", () => {
+  const out = normalizePresets([
+    { name: "A", instruction: "x", icon: "book-open" },
+    { name: "B", instruction: "x", icon: "not an icon" },
+    { name: "C", instruction: "x" }
+  ]);
+  assert.equal(out[0].icon, "book-open");
+  assert.equal("icon" in out[1], false);
+  assert.equal("icon" in out[2], false);
+});
+

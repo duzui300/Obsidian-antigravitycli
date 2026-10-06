@@ -25,6 +25,16 @@ export interface Preset {
    * (title/tags/... fields) instead of free text.
    */
   outputSchema?: string;
+  /** Lucide icon name for the preset chip. Absent -> DEFAULT_PRESET_ICON. */
+  icon?: string;
+}
+
+/** Icon used for presets that do not name one (and for unrecognized names). */
+export const DEFAULT_PRESET_ICON = "sparkles";
+
+/** Icon shown on a preset chip, always a non-empty Lucide name. */
+export function presetIcon(preset: Preset): string {
+  return (preset.icon || "").trim() || DEFAULT_PRESET_ICON;
 }
 
 /** Schema of the built-in Title + tags preset (kept small for the CLI argv). */
@@ -44,7 +54,8 @@ export const BUILTIN_PRESETS: Preset[] = [
     instruction:
       "Summarize the attached text. Start with a one-sentence takeaway, then 3-7 bullet points covering the key arguments, facts, and conclusions. Keep names, numbers, and terms exact.",
     appliesTo: "either",
-    suggestedAction: "append"
+    suggestedAction: "append",
+    icon: "book-open"
   },
   {
     id: "translate",
@@ -52,7 +63,8 @@ export const BUILTIN_PRESETS: Preset[] = [
     instruction:
       "Translate the attached text. If it is Chinese, translate into natural English; otherwise translate into Simplified Chinese. Preserve Markdown structure, headings, lists, links, and code. Output only the translation.",
     appliesTo: "either",
-    suggestedAction: "replace"
+    suggestedAction: "replace",
+    icon: "languages"
   },
   {
     id: "rewrite",
@@ -60,7 +72,8 @@ export const BUILTIN_PRESETS: Preset[] = [
     instruction:
       "Rewrite the attached text to be clearer and more concise while keeping its meaning, tone, and all facts. Keep the same language and Markdown structure. Output only the rewritten text.",
     appliesTo: "selection",
-    suggestedAction: "replace"
+    suggestedAction: "replace",
+    icon: "pencil"
   },
   {
     id: "key-points",
@@ -68,7 +81,8 @@ export const BUILTIN_PRESETS: Preset[] = [
     instruction:
       "Extract the key points of the attached text as a Markdown bullet list (5-12 items). Each bullet is one self-contained fact or argument. Add a final 'Open questions' list if the text leaves anything unresolved.",
     appliesTo: "either",
-    suggestedAction: "append"
+    suggestedAction: "append",
+    icon: "list"
   },
   {
     id: "title-tags",
@@ -77,7 +91,8 @@ export const BUILTIN_PRESETS: Preset[] = [
       "Propose a concise title (under 12 words) and 3-5 tags for the attached text. Tags are lowercase, hyphenated, and specific to the content. Return the structured result only.",
     appliesTo: "note",
     suggestedAction: "frontmatter",
-    outputSchema: TITLE_TAGS_SCHEMA
+    outputSchema: TITLE_TAGS_SCHEMA,
+    icon: "tags"
   }
 ];
 
@@ -95,6 +110,15 @@ export function normalizeSchema(raw: unknown): string | undefined {
   }
 }
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+/** Lucide icon names are kebab-case; anything else is dropped. */
+const ICON_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** Keep only a plausible Lucide icon name (setIcon no-ops on junk). */
+export function normalizePresetIcon(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const name = raw.trim().toLowerCase();
+  return ICON_RE.test(name) ? name : undefined;
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -133,12 +157,21 @@ export function normalizePresets(raw: unknown): Preset[] {
     ids.add(id);
     const appliesTo = TARGETS.has(item.appliesTo as PresetTarget) ? (item.appliesTo as PresetTarget) : "either";
     const outputSchema = normalizeSchema(item.outputSchema);
+    const icon = normalizePresetIcon(item.icon);
     let suggestedAction = ACTIONS.has(item.suggestedAction as ResultAction)
       ? (item.suggestedAction as ResultAction)
       : "copy";
     // "frontmatter" only makes sense for structured output.
     if (suggestedAction === "frontmatter" && !outputSchema) suggestedAction = "copy";
-    out.push({ id, name, instruction, appliesTo, suggestedAction, ...(outputSchema ? { outputSchema } : {}) });
+    out.push({
+      id,
+      name,
+      instruction,
+      appliesTo,
+      suggestedAction,
+      ...(outputSchema ? { outputSchema } : {}),
+      ...(icon ? { icon } : {})
+    });
   }
   return out;
 }
