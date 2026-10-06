@@ -112,6 +112,10 @@ export const DEFAULT_SPAWN_TIMEOUT_MS = 30000;
 export const MAX_LINE_BYTES = 2 * 1024 * 1024;
 /** Only the tail of stderr is kept for diagnostics. */
 export const MAX_STDERR_CHARS = 64 * 1024;
+/** Failure message for an oversized protocol line (derived, so it cannot drift). */
+const OVERSIZE_LINE_MESSAGE = `Antigravity sent a line larger than the ${Math.round(
+  MAX_LINE_BYTES / (1024 * 1024)
+)} MB limit; the turn was stopped.`;
 /** Grace period for a clean exit after stdin.end() before the tree is killed. */
 const CLOSE_GRACE_MS = 1500;
 
@@ -224,11 +228,6 @@ export class AgySession {
     return !!this.turn;
   }
 
-  /** Last stderr output (tail), for diagnostics. */
-  get stderrSnapshot(): string {
-    return this.stderrTail.trim();
-  }
-
   /** Spawn the process and wait for its init event. Rejects on failure. */
   start(): Promise<InitInfo> {
     if (this.proc) return Promise.reject(new Error("session already started"));
@@ -260,7 +259,7 @@ export class AgySession {
       const timer = timerHost.setTimeout(() => {
         this.pendingInit = null;
         this.killTreeFn(child);
-        reject(new Error(classifyFailure({ timedOut: true }).message));
+        reject(new Error(classifyFailure({ timedOut: true, stderr: this.stderrTail }).message));
       }, this.opts.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS);
       this.pendingInit = { resolve, reject, timer };
     });
@@ -390,19 +389,28 @@ export class AgySession {
 
   private onStdout(chunk: string): void {
     this.stdoutBuffer += chunk;
-    if (this.stdoutBuffer.length > MAX_LINE_BYTES) {
-      this.stdoutBuffer = "";
-      this.failTurn("Antigravity sent a line larger than the 2 MB limit; the turn was stopped.", "process");
-      this.stop();
-      return;
-    }
+    // Check the cap per line, after splitting. Testing the whole buffer first
+    // would fail a healthy turn whenever several small lines happened to arrive
+    // in one chunk and summed past the limit.
     let nl = this.stdoutBuffer.indexOf("\n");
     while (nl >= 0) {
       const line = this.stdoutBuffer.slice(0, nl);
       this.stdoutBuffer = this.stdoutBuffer.slice(nl + 1);
+      if (line.length > MAX_LINE_BYTES) {
+        this.abortOversizeLine();
+        return;
+      }
       this.handleLine(line);
       nl = this.stdoutBuffer.indexOf("\n");
     }
+    // An unterminated line must not accumulate without bound.
+    if (this.stdoutBuffer.length > MAX_LINE_BYTES) this.abortOversizeLine();
+  }
+
+  private abortOversizeLine(): void {
+    this.stdoutBuffer = "";
+    this.failTurn(OVERSIZE_LINE_MESSAGE, "process");
+    this.stop();
   }
 
   private handleLine(line: string): void {
@@ -490,7 +498,7 @@ export class AgySession {
     turn.idleTimer = timerHost.setTimeout(() => {
       turn.idleTimer = null;
       if (this.turn !== turn) return;
-      const info = classifyFailure({ timedOut: true });
+      const info = classifyFailure({ timedOut: true, stderr: this.stderrTail });
       this.turn = null;
       this.stop();
       turn.cb.onError(info.message, info.category);

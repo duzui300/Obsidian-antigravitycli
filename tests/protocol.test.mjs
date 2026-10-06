@@ -197,6 +197,25 @@ test("classifyFailure maps the known failure modes", () => {
   assert.match(proc.message, /boom/);
 });
 
+test("a timeout surfaces the CLI's stderr tail when there is one", () => {
+  // A bare timeout can say nothing useful, so any stderr the CLI managed to
+  // print is appended rather than discarded.
+  const bare = classifyFailure({ timedOut: true });
+  assert.equal(bare.category, "timeout");
+  assert.match(bare.message, /did not respond in time/);
+  assert.equal(bare.message.includes("CLI output"), false);
+
+  const noisy = classifyFailure({ timedOut: true, stderr: "warning: token expiring soon" });
+  assert.equal(noisy.category, "timeout");
+  assert.match(noisy.message, /did not respond in time/);
+  assert.match(noisy.message, /CLI output:\nwarning: token expiring soon/);
+});
+
+test("toolPreview stringifies every parameter value the same way", () => {
+  assert.equal(toolPreview({ a: "s", b: 3, c: true }), 'a: "s", b: 3, c: true');
+  assert.equal(toolPreview({ nested: { k: 1 } }), 'nested: {"k":1}');
+});
+
 test("toolPreview compacts parameters to a short single line", () => {
   assert.equal(toolPreview({ CommandLine: "ls -la" }), 'CommandLine: "ls -la"');
   assert.equal(toolPreview({}), "");

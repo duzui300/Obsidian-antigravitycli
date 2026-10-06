@@ -75,8 +75,7 @@ export function toolPreview(params: unknown, max = 120): string {
   if (!isRecord(params)) return "";
   const parts: string[] = [];
   for (const [k, v] of Object.entries(params)) {
-    const val = typeof v === "string" ? JSON.stringify(v) : JSON.stringify(v);
-    parts.push(`${k}: ${val}`);
+    parts.push(`${k}: ${JSON.stringify(v)}`);
   }
   const line = parts.join(", ").replace(/\s+/g, " ");
   if (line.length <= max) return line;
@@ -228,9 +227,14 @@ export function classifyFailure(input: FailureInput): FailureInfo {
     };
   }
   if (input.timedOut) {
+    // A timeout is the one failure where classification can say nothing useful
+    // on its own, so hand the user whatever the CLI did manage to print.
+    const tail = stderr.slice(-400);
     return {
       category: "timeout",
-      message: "Antigravity did not respond in time. The turn was stopped; try again or raise the idle timeout in settings."
+      message:
+        "Antigravity did not respond in time. The turn was stopped; try again or raise the idle timeout in settings." +
+        (tail ? `\n\nCLI output:\n${tail}` : "")
     };
   }
   if (/not logged in/i.test(combined) || /login required/i.test(combined)) {

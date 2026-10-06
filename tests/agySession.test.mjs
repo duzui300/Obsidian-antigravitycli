@@ -338,3 +338,75 @@ test("lines split across chunks are reassembled", async () => {
   const info = await p;
   assert.equal(info.conversationId, CONV);
 });
+
+// --- line-size cap -------------------------------------------------------
+
+const CAP = 2 * 1024 * 1024;
+
+/** Poll until the predicate holds (stream delivery is asynchronous). */
+async function until(pred, ms = 2000) {
+  const started = Date.now();
+  while (Date.now() - started < ms) {
+    if (pred()) return true;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  return pred();
+}
+
+test("a burst of small lines does not trip the line-size cap", async () => {
+  // The cap is per line. Testing the whole buffered backlog before splitting
+  // would fail a healthy turn whenever many short lines arrived together.
+  const { child, session } = makeSession();
+  const p = session.start();
+  child.line(init());
+  await p;
+
+  const chunks = [];
+  let done = false;
+  session.send("go", {
+    onChunk: (t) => chunks.push(t),
+    onError: (m) => assert.fail("unexpected error: " + m),
+    onDone: () => (done = true)
+  });
+
+  const pad = "x".repeat(9000);
+  const count = 300; // ~2.7 MB in total, with every single line far under the cap
+  let burst = "";
+  for (let i = 0; i < count; i++) {
+    burst += JSON.stringify(step({ step_index: i, state: "ACTIVE", step_type: "agent_response", text_delta: pad })) + "\n";
+  }
+  assert.ok(burst.length > CAP, "the burst really does exceed the cap in total");
+  child.stdout.write(burst);
+  child.line(result({ response: "ok" }));
+
+  await until(() => done);
+  assert.equal(done, true, "the turn completed despite the oversized backlog");
+  assert.equal(chunks.length, count);
+});
+
+test("a single line over the cap stops the turn", async () => {
+  const { child, session, killed } = makeSession();
+  const p = session.start();
+  child.line(init());
+  await p;
+  let err = null;
+  session.send("go", { onChunk: () => {}, onError: (m) => (err = m), onDone: () => assert.fail("done") });
+  child.stdout.write(
+    JSON.stringify(step({ step_index: 1, state: "ACTIVE", step_type: "agent_response", text_delta: "y".repeat(CAP + 64) })) + "\n"
+  );
+  await until(() => err !== null);
+  assert.match(err, /larger than the 2 MB limit/);
+  assert.equal(killed.length, 1);
+});
+
+test("an unterminated line growing past the cap stops the turn", async () => {
+  const { child, session } = makeSession();
+  const p = session.start();
+  child.line(init());
+  await p;
+  let err = null;
+  session.send("go", { onChunk: () => {}, onError: (m) => (err = m), onDone: () => assert.fail("done") });
+  child.stdout.write("z".repeat(CAP + 16)); // no newline ever arrives
+  await until(() => err !== null);
+  assert.match(err, /larger than the 2 MB limit/);
+});
