@@ -9,7 +9,7 @@ import type AntigravityPlugin from "../main";
 import type { TurnContext } from "../main";
 import type { AgySession, ChatHandle } from "../runtime/agySession";
 import { structuredToMarkdown } from "../runtime/batch";
-import { assembleTurn } from "../runtime/context";
+import { assembleTurn, stripAppContext } from "../runtime/context";
 import type { NoteContext } from "../runtime/context";
 import { Conversation, StoredMessage, deriveTitle, lastMessagePreview, relativeTime, tabLabel } from "../runtime/history";
 import { Preset, ResultAction, presetApplicable, presetIcon, presetInstruction, presetTarget } from "../runtime/presets";
@@ -707,13 +707,13 @@ export class AntigravityView extends ItemView {
       }
     } catch (e) {
       const msg = (e as Error).message || String(e);
-      this.finishWithError(tab, assistant, msg);
+      this.finishWithError(tab, assistant, msg, "", ctx, preset);
       return;
     }
     if (!starting) {
       // Stopped while starting.
       if (oneShot) void oneShot.close();
-      this.finishWithError(tab, assistant, "Stopped.");
+      this.finishWithError(tab, assistant, "Stopped.", "", ctx, preset);
       return;
     }
     starting = false;
@@ -776,7 +776,7 @@ export class AntigravityView extends ItemView {
         },
         onError: (msg) => {
           releaseOneShot();
-          this.finishWithError(tab, assistant, msg, buffer);
+          this.finishWithError(tab, assistant, msg, buffer, ctx, preset);
         },
         onDone: (conversationId, _response, structured) => {
           releaseOneShot();
@@ -800,13 +800,20 @@ export class AntigravityView extends ItemView {
       });
     } catch (e) {
       releaseOneShot();
-      this.finishWithError(tab, assistant, (e as Error).message);
+      this.finishWithError(tab, assistant, (e as Error).message, "", ctx, preset);
       return;
     }
     this.refreshRunningState();
   }
 
-  private finishWithError(tab: Tab, assistant: AssistantEls, msg: string, partial = ""): void {
+  private finishWithError(
+    tab: Tab,
+    assistant: AssistantEls,
+    msg: string,
+    partial = "",
+    ctx?: TurnContext,
+    preset?: Preset
+  ): void {
     assistant.cancelPending?.();
     assistant.streamEl.addClass("agy-hidden");
     // The error lives outside contentEl, which the render chain still owns, so a
@@ -825,7 +832,8 @@ export class AntigravityView extends ItemView {
     assistant.cancelPending = undefined;
     if (partial.trim() && finalize) {
       void finalize().then(() => {
-        this.renderResultActions(assistant, partial, undefined);
+        // A failed turn that still produced text keeps its result actions.
+        this.renderResultActions(assistant, partial, ctx, preset?.suggestedAction);
         this.refreshScrollBtn();
       });
     }
@@ -999,7 +1007,11 @@ export class AntigravityView extends ItemView {
     if (!tab.messages.length) return;
     const messages: StoredMessage[] = tab.messages.map((m, i) => {
       const meta = tab.uiMeta[i];
-      const stored: StoredMessage = { role: m.role, content: m.content };
+      // A user turn is stored as the assembled prompt. Drop the house
+      // instructions block: it is ~1.5 kB per turn, identical every time, and
+      // rebuilt before each send anyway.
+      const content = m.role === "user" ? stripAppContext(m.content) : m.content;
+      const stored: StoredMessage = { role: m.role, content };
       if (meta?.display !== undefined) stored.display = meta.display;
       if (meta?.ctx && (meta.ctx.noteContent || meta.ctx.selection)) {
         stored.attachments = { notePath: meta.ctx.notePath, noteContent: meta.ctx.noteContent, selection: meta.ctx.selection };

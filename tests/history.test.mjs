@@ -11,7 +11,8 @@ import {
   relativeTime,
   parseHistoryFile,
   serializeHistoryFile,
-  MAX_CONVERSATIONS
+  MAX_CONVERSATIONS,
+  MAX_STORED_ATTACHMENT_CHARS
 } from "./.build/history.mjs";
 
 test("deriveTitle uses the first non-empty user message, collapsed and trimmed", () => {
@@ -105,6 +106,36 @@ test("parse/serialize round-trips conversations including conversationId and mod
     }
   ];
   assert.deepEqual(parseHistoryFile(serializeHistoryFile(list)), list);
+});
+
+test("serializeHistoryFile truncates oversized attachments but keeps small ones", () => {
+  const big = "a".repeat(25000);
+  const text = serializeHistoryFile([
+    {
+      id: "a",
+      title: "A",
+      updatedAt: 1,
+      messages: [
+        { role: "user", content: "hi", attachments: { notePath: "n.md", noteContent: big, selection: "short" } }
+      ]
+    }
+  ]);
+  assert.ok(text.length < big.length, "the payload is smaller than the attachment it holds");
+
+  const att = parseHistoryFile(text)[0].messages[0].attachments;
+  assert.equal(att.notePath, "n.md", "paths are never truncated");
+  assert.equal(att.selection, "short", "text under the cap is stored verbatim");
+  assert.ok(att.noteContent.length < big.length);
+  assert.match(att.noteContent, /not stored in history/);
+  assert.ok(att.noteContent.startsWith("a".repeat(64)));
+});
+
+test("an attachment exactly at the cap is stored untouched", () => {
+  const exact = "b".repeat(MAX_STORED_ATTACHMENT_CHARS);
+  const text = serializeHistoryFile([
+    { id: "a", title: "A", updatedAt: 1, messages: [{ role: "user", content: "x", attachments: { selection: exact } }] }
+  ]);
+  assert.equal(parseHistoryFile(text)[0].messages[0].attachments.selection, exact);
 });
 
 test("parseHistoryFile is defensive against junk and omits empty optional fields", () => {

@@ -160,7 +160,37 @@ export function parseHistoryFile(text: string): Conversation[] {
   return out;
 }
 
-/** Serialize the store for disk (stable, human-readable). */
+/**
+ * Attached note/selection text is truncated before it reaches disk. One turn can
+ * attach an entire note, so an unbounded store grows by megabytes. The cap keeps
+ * history.json bounded; the cost is that a restored reply can no longer re-find
+ * its original selection, so "Replace selection" falls back to the clipboard.
+ */
+export const MAX_STORED_ATTACHMENT_CHARS = 20000;
+
+function truncateAttachment(text: string): string {
+  if (text.length <= MAX_STORED_ATTACHMENT_CHARS) return text;
+  const dropped = text.length - MAX_STORED_ATTACHMENT_CHARS;
+  return `${text.slice(0, MAX_STORED_ATTACHMENT_CHARS)}\n\n[... ${dropped} more characters not stored in history ...]`;
+}
+
+function capAttachments(
+  a: NonNullable<StoredMessage["attachments"]>
+): NonNullable<StoredMessage["attachments"]> {
+  const out: NonNullable<StoredMessage["attachments"]> = {};
+  if (a.notePath !== undefined) out.notePath = a.notePath;
+  if (a.noteContent !== undefined) out.noteContent = truncateAttachment(a.noteContent);
+  if (a.selection !== undefined) out.selection = truncateAttachment(a.selection);
+  return out;
+}
+
+/** Serialize the store for disk (stable, human-readable, size-bounded). */
 export function serializeHistoryFile(list: Conversation[]): string {
-  return JSON.stringify({ version: 1, conversations: list }, null, 2);
+  const bounded = list.map((c) => ({
+    ...c,
+    messages: c.messages.map((m) =>
+      m.attachments ? { ...m, attachments: capAttachments(m.attachments) } : m
+    )
+  }));
+  return JSON.stringify({ version: 1, conversations: bounded }, null, 2);
 }
